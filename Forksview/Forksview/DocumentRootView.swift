@@ -39,7 +39,6 @@ struct DocumentRootView: View {
                 .allowsHitTesting(document.presentationMode == .reading)
                 .accessibilityHidden(document.presentationMode == .editing)
         }
-        .toolbar { toolbarContent }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: document.presentationMode) { _, newMode in
             if newMode == .reading {
@@ -90,19 +89,5 @@ struct DocumentRootView: View {
             }
         }
         return nil
-    }
-
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            Button(action: { document.togglePresentationMode(nil) }) {
-                Label(
-                    document.presentationMode == .reading ? "Edit" : "Done",
-                    systemImage: document.presentationMode == .reading ? "pencil" : "eye"
-                )
-            }
-            .help(document.presentationMode == .reading ? "Edit (⌘E)" : "Done — Back to Reading (⌘E)")
-            .accessibilityIdentifier("togglePresentationModeButton")
-        }
     }
 }

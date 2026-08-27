@@ -18,10 +18,11 @@ final class MarkdownDocument: NSDocument, ObservableObject {
     var pendingEditingSelection: NSRange?
 
     override func makeWindowControllers() {
-        let rootView = DocumentRootView(document: self)
-        let hostingController = NSHostingController(rootView: rootView)
+        let shellView = DocumentShellView(document: self)
+        let hostingController = NSHostingController(rootView: shellView)
         let window = NSWindow(contentViewController: hostingController)
-        window.setContentSize(NSSize(width: 860, height: 640))
+        window.setContentSize(NSSize(width: 1100, height: 700))
+        window.contentMinSize = NSSize(width: 640, height: 480)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.setAccessibilityIdentifier("documentWindow")
         window.titleVisibility = .visible
