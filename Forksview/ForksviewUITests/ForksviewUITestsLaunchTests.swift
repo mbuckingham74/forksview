@@ -19,7 +19,11 @@ final class ForksviewUITestsLaunchTests: XCTestCase {
 
     @MainActor
     func testLaunch() throws {
-        let app = XCUIApplication()
+        let applicationURL = Bundle.main.bundleURL
+            .deletingLastPathComponent()
+            .appending(path: "Forksview.app", directoryHint: .isDirectory)
+        let app = XCUIApplication(url: applicationURL)
+        app.launchArguments = ["-ApplePersistenceIgnoreState", "YES"]
         app.launch()
 
         // Insert steps here to perform after app launch but before taking a screenshot,

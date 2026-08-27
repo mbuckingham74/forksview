@@ -12,7 +12,7 @@ Derived outline metadata never modifies the Markdown file. Store user bookmarks 
 
 External-change handling must distinguish clean reloads, dirty conflicts, and the app’s own saves. Preserve reading/editing position across mode changes using semantic heading/source anchors rather than raw pixels.
 
-Keep one application target with logical source folders. Avoid internal frameworks, service locators, generic repositories, and speculative abstractions. The proposed deployment target is macOS 15.0. The proposed Swift language mode is Swift 6 with default `MainActor` isolation.
+Keep one application target with logical source folders. Avoid internal frameworks, service locators, generic repositories, and speculative abstractions. The accepted deployment target is macOS 26.0. This avoids unnecessary compatibility work for a personal macOS 26 app. The proposed Swift language mode is Swift 6 with default `MainActor` isolation.
 
 ## Renderer decision
 
