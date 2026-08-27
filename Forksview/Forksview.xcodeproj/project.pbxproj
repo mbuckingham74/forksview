@@ -50,11 +50,15 @@
 		};
 		2D6E5C17303D4C0A00B7AFF2 /* ForksviewTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = ForksviewTests;
 			sourceTree = "<group>";
 		};
 		2D6E5C21303D4C0A00B7AFF2 /* ForksviewUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = ForksviewUITests;
 			sourceTree = "<group>";
 		};
@@ -125,6 +129,7 @@
 			);
 			name = Forksview;
 			packageProductDependencies = (
+				612E151CC4159191D33FEBB9 /* MarkdownUI */,
 			);
 			productName = Forksview;
 			productReference = 2D6E5C07303D4C0900B7AFF2 /* Forksview.app */;
@@ -147,8 +152,6 @@
 				2D6E5C17303D4C0A00B7AFF2 /* ForksviewTests */,
 			);
 			name = ForksviewTests;
-			packageProductDependencies = (
-			);
 			productName = ForksviewTests;
 			productReference = 2D6E5C14303D4C0A00B7AFF2 /* ForksviewTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -170,8 +173,6 @@
 				2D6E5C21303D4C0A00B7AFF2 /* ForksviewUITests */,
 			);
 			name = ForksviewUITests;
-			packageProductDependencies = (
-			);
 			productName = ForksviewUITests;
 			productReference = 2D6E5C1E303D4C0A00B7AFF2 /* ForksviewUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -208,6 +209,9 @@
 			);
 			mainGroup = 2D6E5BFE303D4C0900B7AFF2;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				ECFBD928D8FF3072A90F2C23 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 2D6E5C08303D4C0900B7AFF2 /* Products */;
 			projectDirPath = "";
@@ -588,6 +592,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		ECFBD928D8FF3072A90F2C23 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.4.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		612E151CC4159191D33FEBB9 /* MarkdownUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = ECFBD928D8FF3072A90F2C23 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
+			productName = MarkdownUI;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 2D6E5BFF303D4C0900B7AFF2 /* Project object */;
 }

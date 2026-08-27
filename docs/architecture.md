@@ -16,11 +16,13 @@ Keep one application target with logical source folders. Avoid internal framewor
 
 ## Renderer decision
 
-Renderer selection is deliberately deferred until an acceptance spike. `swift-markdown` 0.8.0 was current at the 2026-08-24 review and is the proposed semantic parser for headings/source structure, subject to re-verification when adopted.
+Spike completed 2026-08-26 against `Forksview/Forksview/Fixtures/AcceptanceFixture.md`, covering headings, emphasis, links, ordered/unordered lists, blockquotes, fenced code, tables, task lists, local/relative and remote images, duplicate headings, selection/copying, theming, and long-document behavior. Verified on macOS 26 / Xcode 26.6 / Swift 6.
 
-MarkdownUI is in maintenance mode, not deprecated. MarkdownUI 2.4.1—not 2.1.0—was its latest stable release at the 2026-08-24 review. Textual is the actively developed successor but was pre-1.0.
+`swift-markdown` 0.8.0 (2026-05-07) remains current and is suitable as a semantic parser for headings/source structure, but is parser-only and would require a bespoke renderer.
 
-The acceptance spike must compare the then-current compatible releases against the same fixture covering headings, links, lists, blockquotes, fenced code, tables, task lists, local/relative images, remote images, duplicate headings, text selection, theming, and long-document performance. No Markdown dependency is approved until that spike passes. Keep the renderer behind an app-owned `MarkdownReadingView` adapter.
+MarkdownUI 2.4.1 is the latest stable release (maintenance mode, not deprecated; Textual is the actively developed successor but was pre-1.0 at review: 0.5.0 on 2026-06-15, macOS 15+). MarkdownUI 2.4.1 requires macOS 12+ (tables/multi-image on 13+) and remains compatible with macOS 26 + Swift 6.
+
+**Selected: MarkdownUI 2.4.1** via `https://github.com/gonzalezreal/swift-markdown-ui` (`upToNextMajorVersion` 2.4.1, product `MarkdownUI`). It provides GFM headings, emphasis, links, lists including task lists, blockquotes, fenced code, tables, and images (local via `baseURL`, remote via NetworkImage), selectable text (`.textSelection(.enabled)`), clickable links, sensible code blocks and tables via the built-in `gitHub` theme, dark/light appearance, and reasonable long-document behavior inside a `ScrollView`. The dependency is isolated behind the app-owned `MarkdownReadingView`; `MarkdownDocument` retains no parsing/rendering concerns and native edit mode is untouched. Textual remains a future option once it reaches 1.0 but is not adopted for this spike.
 
 ## Milestone order
 

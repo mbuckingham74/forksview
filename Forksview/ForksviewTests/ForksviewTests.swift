@@ -253,6 +253,87 @@ final class ForksviewTests: XCTestCase {
         XCTAssertFalse(document.isDocumentEdited)
     }
 
+    func testAcceptanceFixtureContainsRequiredMarkdownElements() throws {
+        let fixtureURL = try XCTUnwrap(locateAcceptanceFixtureURL())
+        let content = try String(contentsOf: fixtureURL, encoding: .utf8)
+        XCTAssertTrue(content.contains("# Forksview Acceptance Fixture"), "fixture must contain top-level heading")
+        XCTAssertTrue(content.contains("## Overview"), "fixture must contain headings")
+        XCTAssertTrue(content.contains("**"), "fixture must contain emphasis")
+        XCTAssertTrue(content.contains("[Example](https://example.com)"), "fixture must contain links")
+        XCTAssertTrue(content.contains("- First item"), "fixture must contain unordered lists")
+        XCTAssertTrue(content.contains("1. Step one"), "fixture must contain ordered lists")
+        XCTAssertTrue(content.contains("> “Reading mode is the default"), "fixture must contain blockquote")
+        XCTAssertTrue(content.contains("```swift"), "fixture must contain fenced code")
+        XCTAssertTrue(content.contains("| Feature | Required |"), "fixture must contain tables")
+        XCTAssertTrue(content.contains("- [x] Completed task"), "fixture must contain task lists")
+        XCTAssertTrue(content.contains("![Local asset]"), "fixture must contain local image")
+        XCTAssertTrue(content.contains("![Remote]"), "fixture must contain remote image")
+        XCTAssertTrue(content.contains("Duplicate heading"), "fixture must contain duplicate headings")
+        XCTAssertTrue(content.filter({ $0 == "\n" }).count > 80, "fixture must be long enough to expose long-document behavior")
+        XCTAssertTrue(content.contains("Repeated Block 15"), "fixture must include repeated block to test long-document scrolling")
+    }
+
+    func testMarkdownReadingViewPreservesContentAndBaseURL() {
+        let base = URL(fileURLWithPath: "/tmp/example.md")
+        let sample = "# Hello\n\nWorld [link](https://example.com)"
+        let view = MarkdownReadingView(markdown: sample, baseURL: base)
+        XCTAssertEqual(view.markdown, sample)
+        XCTAssertEqual(view.baseURL, base)
+
+        let empty = MarkdownReadingView(markdown: "")
+        XCTAssertEqual(empty.markdown, "")
+        XCTAssertNil(empty.baseURL)
+    }
+
+    func testRendererIsIsolatedBehindMarkdownReadingView() throws {
+        let appSourcesURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appending(path: "Forksview", directoryHint: .isDirectory)
+        let fileURLs = try FileManager.default
+            .contentsOfDirectory(at: appSourcesURL, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" }
+        var importers: [String] = []
+        for url in fileURLs {
+            let text = try String(contentsOf: url, encoding: .utf8)
+            if text.contains("import MarkdownUI") {
+                importers.append(url.lastPathComponent)
+            }
+        }
+        XCTAssertEqual(importers, ["MarkdownReadingView.swift"], "only MarkdownReadingView should import MarkdownUI")
+    }
+
+    private func locateAcceptanceFixtureURL() -> URL? {
+        let bundles: [Bundle] = [.main, Bundle(for: ForksviewTests.self)]
+        for bundle in bundles {
+            if let url = bundle.url(forResource: "AcceptanceFixture", withExtension: "md") {
+                return url
+            }
+            if let url = bundle.url(forResource: "AcceptanceFixture", withExtension: "md", subdirectory: "Fixtures") {
+                return url
+            }
+        }
+        let candidatePaths: [String] = [
+            "Forksview/Forksview/Fixtures/AcceptanceFixture.md",
+            "Forksview/Fixtures/AcceptanceFixture.md",
+        ]
+        let fm = FileManager.default
+        let searchRoots: [URL] = [
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
+            URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent(),
+            URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent(),
+        ]
+        for root in searchRoots {
+            for candidate in candidatePaths {
+                let url = root.appending(path: candidate)
+                if fm.fileExists(atPath: url.path) {
+                    return url
+                }
+            }
+        }
+        return nil
+    }
+
     private func roundTrip(_ data: Data) throws -> Data {
         let document = MarkdownDocument()
         try document.read(from: data, ofType: MarkdownDocument.typeIdentifier)
