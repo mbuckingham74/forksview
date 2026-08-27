@@ -18,13 +18,50 @@ enum ForksviewApp {
 
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        _ = NSDocumentController.shared
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Milestone 4 spike: allow UI tests and manual verification to open the renderer harness via launch argument.
-        if CommandLine.arguments.contains("--renderer-spike") {
+        let fileURLs: [URL] = CommandLine.arguments.dropFirst().compactMap { arg in
+            if arg.hasPrefix("-") { return nil }
+            if arg == "YES" || arg == "NO" { return nil }
+            if arg == "--renderer-spike" { return nil }
+            let url = URL(fileURLWithPath: arg)
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else {
+                return nil
+            }
+            return url
+        }
+        if fileURLs.isEmpty {
+            if NSDocumentController.shared.documents.isEmpty {
+                NSDocumentController.shared.newDocument(nil)
+            } else {
+                DispatchQueue.main.async {
+                    if NSDocumentController.shared.documents.isEmpty {
+                        NSDocumentController.shared.newDocument(nil)
+                    }
+                }
+            }
+        } else {
+            let existingPaths = Set(
+                NSDocumentController.shared.documents.compactMap { ($0 as? MarkdownDocument)?.fileURL?.path }
+            )
+            for url in fileURLs where !existingPaths.contains(url.path) {
+                NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, _ in }
+            }
             DispatchQueue.main.async {
-                RendererSpikeHost.shared.show()
+                if NSDocumentController.shared.documents.isEmpty {
+                    NSDocumentController.shared.newDocument(nil)
+                }
             }
         }
+    }
+
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        let url = URL(fileURLWithPath: filename)
+        NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, _ in }
+        return true
     }
 
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
@@ -35,11 +72,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
-        true
-    }
-
-    @objc func showRendererSpike(_ sender: Any?) {
-        RendererSpikeHost.shared.show()
+        // Standard behavior: if no visible windows, NSApplication will ask delegate via
+        // applicationShouldOpenUntitledFile and create one. Returning true lets AppKit handle it.
+        // Our explicit DidFinishLaunching handles initial launch; this covers Dock reopen.
+        if !flag {
+            DispatchQueue.main.async {
+                if NSDocumentController.shared.documents.isEmpty ||
+                    NSDocumentController.shared.documents.allSatisfy({ ($0.windowControllers.first?.window?.isVisible ?? false) == false }) {
+                    NSDocumentController.shared.newDocument(nil)
+                }
+            }
+        }
+        return true
     }
 }
 
@@ -50,6 +94,7 @@ private enum MainMenu {
         mainMenu.addItem(applicationMenu(for: application))
         mainMenu.addItem(fileMenu())
         mainMenu.addItem(editMenu())
+        mainMenu.addItem(viewMenu())
         mainMenu.addItem(windowMenu(for: application))
         mainMenu.addItem(helpMenu())
         application.mainMenu = mainMenu
@@ -120,6 +165,23 @@ private enum MainMenu {
         return item
     }
 
+    private static func viewMenu() -> NSMenuItem {
+        let item = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
+        let menu = NSMenu(title: "View")
+        item.submenu = menu
+        // Milestone 5: Cmd+E toggles reading/editing for active document window.
+        // Target nil -> first responder (MarkdownDocument in responder chain).
+        let toggle = NSMenuItem(
+            title: "Toggle Reading/Edit View",
+            action: #selector(MarkdownDocumentWindowController.togglePresentationMode(_:)),
+            keyEquivalent: "e"
+        )
+        toggle.keyEquivalentModifierMask = .command
+        toggle.target = nil
+        menu.addItem(toggle)
+        return item
+    }
+
     private static func windowMenu(for application: NSApplication) -> NSMenuItem {
         let item = NSMenuItem(title: "Window", action: nil, keyEquivalent: "")
         let menu = NSMenu(title: "Window")
@@ -129,18 +191,6 @@ private enum MainMenu {
         menu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
-        menu.addItem(.separator())
-        // Milestone 4 acceptance harness — temporary spike, not Milestone 5 toggle.
-        let spike = NSMenuItem(
-            title: "Renderer Spike — Acceptance Fixture",
-            action: #selector(AppDelegate.showRendererSpike(_:)),
-            keyEquivalent: ""
-        )
-        // Use the app delegate directly; responder chain would not find AppDelegate otherwise.
-        if let delegate = application.delegate as? AppDelegate {
-            spike.target = delegate
-        }
-        menu.addItem(spike)
         application.windowsMenu = menu
         return item
     }

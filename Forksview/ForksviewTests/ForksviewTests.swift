@@ -354,7 +354,7 @@ final class ForksviewTests: XCTestCase {
     func testFixtureLocalImageResolvesToExistingFile() throws {
         // Exact invariant: the renderer-resolved URL must itself exist.
         // No fallback search (bundle root, flattened location) is relevant.
-        let fixtureURL = try XCTUnwrap(RendererSpikeHost.locateFixtureURL(), "fixture must be located via harness")
+        let fixtureURL = try XCTUnwrap(locateAcceptanceFixtureURL(), "fixture must be located")
         let baseURL = fixtureURL.deletingLastPathComponent()
         let local = MarkdownImageResolver.resolvedURL(for: "assets/local.png", baseURL: baseURL)
         XCTAssertNotNil(local)
@@ -366,23 +366,220 @@ final class ForksviewTests: XCTestCase {
         XCTAssertTrue(MarkdownImageResolver.localFileExists(at: dotLocal), "renderer-resolved ./assets/local.png URL \(String(describing: dotLocal?.path)) must exist")
     }
 
-    func testSpikeHostLocatesFixtureAndBaseURL() throws {
-        let fixtureURL = try XCTUnwrap(RendererSpikeHost.locateFixtureURL())
+    func testFixtureLocatorFindsAcceptanceFixture() throws {
+        let fixtureURL = try XCTUnwrap(locateAcceptanceFixtureURL())
         XCTAssertTrue(FileManager.default.fileExists(atPath: fixtureURL.path))
-        let (markdown, baseURL) = RendererSpikeHost.loadFixture()
-        XCTAssertFalse(markdown.isEmpty)
-        XCTAssertNotNil(baseURL)
-        XCTAssertTrue(baseURL?.isFileURL == true)
-        XCTAssertTrue(markdown.contains("# Forksview Acceptance Fixture"))
+        let content = try String(contentsOf: fixtureURL, encoding: .utf8)
+        XCTAssertFalse(content.isEmpty)
+        XCTAssertTrue(content.contains("# Forksview Acceptance Fixture"))
+        let baseURL = fixtureURL.deletingLastPathComponent()
+        XCTAssertTrue(baseURL.isFileURL)
     }
 
-    func testSpikeHostRendersRealFixtureContent() {
-        // Proves harness uses real MarkdownReadingView input, not a stub.
-        let (markdown, baseURL) = RendererSpikeHost.loadFixture()
+    func testReadingViewRendersRealFixtureContent() throws {
+        let fixtureURL = try XCTUnwrap(locateAcceptanceFixtureURL())
+        let markdown = try String(contentsOf: fixtureURL, encoding: .utf8)
+        let baseURL = fixtureURL.deletingLastPathComponent()
         let view = MarkdownReadingView(markdown: markdown, baseURL: baseURL)
         XCTAssertEqual(view.markdown, markdown)
         XCTAssertEqual(view.baseURL, baseURL)
         XCTAssertTrue(view.markdown.contains("assets/local.png"))
+    }
+
+    // MARK: - Milestone 5: reading/edit transition
+
+    func testReadingIsDefaultForNewDocument() {
+        let document = MarkdownDocument()
+        XCTAssertEqual(document.presentationMode, .reading, "new documents must default to reading per product contract")
+    }
+
+    func testReadingIsDefaultForReopenedDocument() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let fileURL = dir.appending(path: "reopen-default.md")
+        try Data("# Hello\n".utf8).write(to: fileURL)
+        let doc = try MarkdownDocument(contentsOf: fileURL, ofType: MarkdownDocument.typeIdentifier)
+        XCTAssertEqual(doc.presentationMode, .reading)
+    }
+
+    func testTogglePresentationModeSwitchesBetweenReadingAndEditing() {
+        let document = MarkdownDocument()
+        XCTAssertEqual(document.presentationMode, .reading)
+        document.togglePresentationMode(nil)
+        XCTAssertEqual(document.presentationMode, .editing)
+        document.togglePresentationMode(nil)
+        XCTAssertEqual(document.presentationMode, .reading)
+        document.enterEditingMode(nil)
+        XCTAssertEqual(document.presentationMode, .editing)
+        document.enterReadingMode(nil)
+        XCTAssertEqual(document.presentationMode, .reading)
+    }
+
+    func testEditToReadUsesLatestTextWithoutSave() {
+        let document = MarkdownDocument()
+        document.replaceText(with: "initial")
+        document.togglePresentationMode(nil) // reading -> editing
+        XCTAssertEqual(document.presentationMode, .editing)
+        // Simulate typing via replaceText (same path as NSTextView delegate)
+        document.replaceText(with: "# Edited\n\nNew content with **bold**")
+        // Toggle to reading - should immediately see latest text
+        document.togglePresentationMode(nil)
+        XCTAssertEqual(document.presentationMode, .reading)
+        // Reading view consumes document.text directly - verify latest
+        let reading = MarkdownReadingView(markdown: document.text, baseURL: document.renderingBaseURL)
+        XCTAssertEqual(reading.markdown, "# Edited\n\nNew content with **bold**")
+        XCTAssertTrue(reading.markdown.contains("New content"))
+    }
+
+    func testReadToEditPreservesText() {
+        let document = MarkdownDocument()
+        let original = "## Heading\n\nBody text"
+        document.replaceText(with: original)
+        XCTAssertEqual(document.presentationMode, .reading)
+        document.togglePresentationMode(nil) // to editing
+        XCTAssertEqual(document.presentationMode, .editing)
+        XCTAssertEqual(document.text, original)
+        // Simulate editing branch still shows same text via MarkdownTextView sync
+        let editor = MarkdownTextEditorScrollView()
+        let coordinator = MarkdownTextView.Coordinator(document: document)
+        coordinator.connect(to: editor.textView)
+        defer { coordinator.disconnect() }
+        coordinator.synchronizeTextView(with: document.text)
+        XCTAssertEqual(editor.textView.string, original)
+    }
+
+    func testRendererReceivesCorrectBaseURLViaDocument() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let fileURL = dir.appending(path: "base.md")
+        try Data("![Local](assets/local.png)".utf8).write(to: fileURL)
+        let doc = try MarkdownDocument(contentsOf: fileURL, ofType: MarkdownDocument.typeIdentifier)
+        // readingBaseURL is dir, passed to reading view
+        let view = MarkdownReadingView(markdown: doc.text, baseURL: doc.renderingBaseURL)
+        XCTAssertEqual(view.baseURL?.path, dir.path)
+        XCTAssertEqual(view.markdown, "![Local](assets/local.png)")
+    }
+
+    func testNativeEditorRemainsNSTextView() {
+        let editor = MarkdownTextEditorScrollView()
+        XCTAssertFalse(editor.textView.isRichText)
+        XCTAssertTrue(editor.textView.allowsUndo)
+        XCTAssertFalse(editor.textView.isAutomaticQuoteSubstitutionEnabled)
+        XCTAssertFalse(editor.textView.isAutomaticDashSubstitutionEnabled)
+        XCTAssertEqual(editor.textView.accessibilityIdentifier(), "markdownTextEditor")
+    }
+
+    func testDirtyStateRemainsTruthfulAcrossModeToggles() throws {
+        let document = MarkdownDocument()
+        let um = try XCTUnwrap(document.undoManager)
+        um.groupsByEvent = false
+        XCTAssertFalse(document.isDocumentEdited)
+        um.beginUndoGrouping()
+        replaceText("dirty edit", in: document, registeringWith: um)
+        um.endUndoGrouping()
+        XCTAssertTrue(document.isDocumentEdited)
+        // Toggle reading/editing should not clear dirty
+        document.togglePresentationMode(nil)
+        XCTAssertTrue(document.isDocumentEdited)
+        document.togglePresentationMode(nil)
+        XCTAssertTrue(document.isDocumentEdited)
+        // Undo should clear dirty even after toggles
+        um.undo()
+        XCTAssertFalse(document.isDocumentEdited)
+        XCTAssertEqual(document.text, "")
+    }
+
+    func testUndoHistorySurvivesModeTransitions() throws {
+        let document = MarkdownDocument()
+        let um = try XCTUnwrap(document.undoManager)
+        um.groupsByEvent = false
+        um.beginUndoGrouping()
+        replaceText("first edit", in: document, registeringWith: um)
+        um.endUndoGrouping()
+        um.beginUndoGrouping()
+        replaceText("second edit", in: document, registeringWith: um)
+        um.endUndoGrouping()
+        XCTAssertEqual(document.text, "second edit")
+        // Toggle through modes several times
+        document.togglePresentationMode(nil)
+        document.togglePresentationMode(nil)
+        document.togglePresentationMode(nil)
+        XCTAssertEqual(document.presentationMode, .editing)
+        um.undo()
+        XCTAssertEqual(document.text, "first edit")
+        um.undo()
+        XCTAssertEqual(document.text, "")
+        um.redo()
+        XCTAssertEqual(document.text, "first edit")
+    }
+
+    func testSyncAvoidsFakeUndoOnProgrammaticUpdate() throws {
+        let document = MarkdownDocument()
+        let um = try XCTUnwrap(document.undoManager)
+        let editor = MarkdownTextEditorScrollView()
+        let coordinator = MarkdownTextView.Coordinator(document: document)
+        coordinator.connect(to: editor.textView)
+        defer { coordinator.disconnect() }
+        // Programmatic sync must not register undo
+        document.replaceText(with: "programmatic")
+        coordinator.synchronizeTextView(with: document.text)
+        XCTAssertFalse(um.canUndo)
+        // Toggle should keep that invariant
+        document.togglePresentationMode(nil)
+        document.togglePresentationMode(nil)
+        XCTAssertFalse(um.canUndo)
+    }
+
+    func testDocumentAnchorFindsNearestHeading() {
+        let text = "# Top\n\nBody\n\n## Section One\n\nContent\n\n### Subsection\n\nMore"
+        // Offset inside "More" should find "Subsection"
+        let offsetNearEnd = (text as NSString).length - 2
+        let anchor = DocumentAnchor.anchor(for: offsetNearEnd, in: text)
+        XCTAssertEqual(anchor.heading, "Subsection")
+        // Offset inside Section One content should find Section One
+        let sectionOneRange = (text as NSString).range(of: "Content")
+        let anchor2 = DocumentAnchor.anchor(for: sectionOneRange.location, in: text)
+        XCTAssertEqual(anchor2.heading, "Section One")
+        // Offset at top should find Top
+        let anchorTop = DocumentAnchor.anchor(for: 2, in: text)
+        XCTAssertEqual(anchorTop.heading, "Top")
+        // No heading case
+        let plain = "Just plain text\nno headings"
+        let anchorPlain = DocumentAnchor.anchor(for: 5, in: plain)
+        XCTAssertNil(anchorPlain.heading)
+    }
+
+    func testDocumentAnchorClampsOffsetAndCalculatesLine() {
+        let text = "line1\nline2\n# Heading\nline4"
+        let anchor = DocumentAnchor.anchor(for: 9999, in: text)
+        XCTAssertEqual(anchor.offset, (text as NSString).length)
+        XCTAssertEqual(anchor.heading, "Heading")
+        let lineAnchor = DocumentAnchor.anchor(for: 0, in: text)
+        XCTAssertEqual(lineAnchor.line, 1)
+        let secondLine = DocumentAnchor.anchor(for: 6, in: text) // after "line1\n"
+        XCTAssertEqual(secondLine.line, 2)
+    }
+
+    func testSingleSourceOfTruthAcrossModes() {
+        let document = MarkdownDocument()
+        document.replaceText(with: "shared")
+        // Both presentations read same string, no copy
+        let reading = MarkdownReadingView(markdown: document.text, baseURL: nil)
+        XCTAssertEqual(reading.markdown, document.text)
+        let editor = MarkdownTextEditorScrollView()
+        let coordinator = MarkdownTextView.Coordinator(document: document)
+        coordinator.connect(to: editor.textView)
+        defer { coordinator.disconnect() }
+        coordinator.synchronizeTextView(with: document.text)
+        XCTAssertEqual(editor.textView.string, document.text)
+        // Change once, both should see latest on next sync/toggle
+        document.replaceText(with: "shared updated")
+        coordinator.synchronizeTextView(with: document.text)
+        let reading2 = MarkdownReadingView(markdown: document.text, baseURL: nil)
+        XCTAssertEqual(reading2.markdown, "shared updated")
+        XCTAssertEqual(editor.textView.string, "shared updated")
     }
 
     private func locateAcceptanceFixtureURL() -> URL? {

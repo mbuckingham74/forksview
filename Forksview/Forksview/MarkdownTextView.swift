@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 protocol MarkdownTextEditing: AnyObject {
     func breakUndoCoalescing()
+    func selectedRange() -> NSRange
 }
 
 @MainActor
@@ -16,8 +17,14 @@ struct MarkdownTextView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> MarkdownTextEditorScrollView {
         let scrollView = MarkdownTextEditorScrollView()
-        scrollView.textView.string = document.text
         context.coordinator.connect(to: scrollView.textView)
+        // Initial text load must not register undo; document's manager should remain clean.
+        let undoManager = scrollView.textView.undoManager
+        undoManager?.disableUndoRegistration()
+        if scrollView.textView.string != document.text {
+            scrollView.textView.string = document.text
+        }
+        undoManager?.enableUndoRegistration()
         return scrollView
     }
 
@@ -45,6 +52,14 @@ struct MarkdownTextView: NSViewRepresentable {
             self.textView = textView
             textView.delegate = self
             document?.registerTextEditor(self)
+            if let pending = document?.pendingEditingSelection {
+                let maxLoc = (textView.string as NSString).length
+                let clampedLoc = min(pending.location, maxLoc)
+                let clampedLen = min(pending.length, max(0, maxLoc - clampedLoc))
+                let clamped = NSRange(location: clampedLoc, length: clampedLen)
+                textView.setSelectedRange(clamped)
+                textView.scrollRangeToVisible(clamped)
+            }
         }
 
         func disconnect() {
@@ -71,15 +86,28 @@ struct MarkdownTextView: NSViewRepresentable {
         }
 
         func textDidChange(_ notification: Notification) {
-            guard !isSynchronizingText, let textView else {
+            guard !isSynchronizingText, let textView, let document else {
                 return
             }
 
-            document?.replaceText(with: textView.string)
+            let newText = textView.string
+            guard newText != document.text else { return }
+            document.replaceText(with: newText)
+            // NSDocument automatically observes its UndoManager and updates
+            // isDocumentEdited / changeCount on grouping and undo/redo.
+            // No manual updateChangeCount required.
         }
 
         func breakUndoCoalescing() {
             textView?.breakUndoCoalescing()
+        }
+
+        func selectedRange() -> NSRange {
+            textView?.selectedRange() ?? NSRange(location: 0, length: 0)
+        }
+
+        func undoManager(for view: NSTextView) -> UndoManager? {
+            document?.undoManager
         }
     }
 }
