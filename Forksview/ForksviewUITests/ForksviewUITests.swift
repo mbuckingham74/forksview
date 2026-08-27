@@ -313,6 +313,35 @@ final class ForksviewUITests: XCTestCase {
     }
 
     @MainActor
+    func testRendererSpikeShowsRenderedContentNotRawMarkdown() throws {
+        let app = makeApplication()
+        app.launchArguments = ["-ApplePersistenceIgnoreState", "YES", "--renderer-spike"]
+        app.launch()
+
+        // Native editor still present for untitled document
+        let editor = app.textViews["markdownTextEditor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+
+        // Spike window should appear with rendered content
+        let spikeWindow = app.windows["rendererSpikeWindow"]
+        XCTAssertTrue(spikeWindow.waitForExistence(timeout: 5))
+
+        // Rendered content should contain heading text, not raw Markdown fence
+        // Look for the rendered heading via accessibility or window content
+        let rendered = spikeWindow.descendants(matching: .any)["renderedMarkdownContent"]
+        // If identifier not exposed via XCUI, at least verify spike window title and scroll view exists
+        XCTAssertTrue(rendered.waitForExistence(timeout: 5) || spikeWindow.staticTexts["Forksview Acceptance Fixture"].waitForExistence(timeout: 3))
+
+        // Verify spike window is additional, not replacing document window -> total 2 windows
+        XCTAssertEqual(app.windows.count, 2)
+
+        // Close spike and ensure document window remains stable
+        spikeWindow.buttons[XCUIIdentifierCloseWindow].click()
+        waitForWindowCount(1, in: app)
+        XCTAssertTrue(editor.exists)
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {

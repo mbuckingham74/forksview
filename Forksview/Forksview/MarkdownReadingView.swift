@@ -3,6 +3,12 @@ import MarkdownUI
 
 /// App-owned reading view. This is the only place Forksview depends on MarkdownUI.
 /// The rest of the app uses this view without importing renderer-specific APIs.
+///
+/// Milestone 4: The view now configures hybrid image providers so both network
+/// (`http`/`https`) and local filesystem (`file:`) Markdown images render.
+/// Relative image sources are resolved against `baseURL` (typically the document's
+/// directory). The provider split keeps all renderer-specific behavior inside this
+/// reading layer — `MarkdownDocument` only supplies an ordinary directory URL.
 @MainActor
 struct MarkdownReadingView: View {
     let markdown: String
@@ -17,6 +23,8 @@ struct MarkdownReadingView: View {
         ScrollView(.vertical) {
             Markdown(markdown, baseURL: baseURL)
                 .markdownTheme(.gitHub)
+                .markdownImageProvider(HybridBlockImageProvider())
+                .markdownInlineImageProvider(HybridInlineImageProvider())
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 24)
@@ -24,6 +32,7 @@ struct MarkdownReadingView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("markdownReadingView")
     }
 }
 

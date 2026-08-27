@@ -45,6 +45,9 @@
 			exceptions = (
 				2D6E5C31303D4C0A00B7AFF2 /* Exceptions for "Forksview" folder in "Forksview" target */,
 			);
+			explicitFolders = (
+				Fixtures,
+			);
 			path = Forksview;
 			sourceTree = "<group>";
 		};

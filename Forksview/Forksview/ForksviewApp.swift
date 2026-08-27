@@ -18,6 +18,15 @@ enum ForksviewApp {
 
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Milestone 4 spike: allow UI tests and manual verification to open the renderer harness via launch argument.
+        if CommandLine.arguments.contains("--renderer-spike") {
+            DispatchQueue.main.async {
+                RendererSpikeHost.shared.show()
+            }
+        }
+    }
+
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
         true
     }
@@ -27,6 +36,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         hasVisibleWindows flag: Bool
     ) -> Bool {
         true
+    }
+
+    @objc func showRendererSpike(_ sender: Any?) {
+        RendererSpikeHost.shared.show()
     }
 }
 
@@ -116,6 +129,18 @@ private enum MainMenu {
         menu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        // Milestone 4 acceptance harness — temporary spike, not Milestone 5 toggle.
+        let spike = NSMenuItem(
+            title: "Renderer Spike — Acceptance Fixture",
+            action: #selector(AppDelegate.showRendererSpike(_:)),
+            keyEquivalent: ""
+        )
+        // Use the app delegate directly; responder chain would not find AppDelegate otherwise.
+        if let delegate = application.delegate as? AppDelegate {
+            spike.target = delegate
+        }
+        menu.addItem(spike)
         application.windowsMenu = menu
         return item
     }

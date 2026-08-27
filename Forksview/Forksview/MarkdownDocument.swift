@@ -62,4 +62,13 @@ final class MarkdownDocument: NSDocument, ObservableObject {
 
         textEditor = nil
     }
+
+    // MARK: - Rendering support (Milestone 4)
+    // Ordinary document information only. Renderer-specific loading stays in MarkdownReadingView.
+
+    /// Directory containing the document on disk, used as `baseURL` for relative image resolution.
+    /// Returns `nil` for untitled documents without a file URL.
+    var renderingBaseURL: URL? {
+        fileURL?.deletingLastPathComponent()
+    }
 }

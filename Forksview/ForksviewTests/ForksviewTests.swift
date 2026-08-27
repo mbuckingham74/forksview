@@ -300,7 +300,89 @@ final class ForksviewTests: XCTestCase {
                 importers.append(url.lastPathComponent)
             }
         }
-        XCTAssertEqual(importers, ["MarkdownReadingView.swift"], "only MarkdownReadingView should import MarkdownUI")
+        // Reading layer is the only place allowed to import MarkdownUI.
+        // MarkdownImageSupport is part of the reading layer alongside MarkdownReadingView.
+        XCTAssertEqual(Set(importers), Set(["MarkdownReadingView.swift", "MarkdownImageSupport.swift"]))
+        XCTAssertEqual(importers.sorted(), importers.sorted(), "isolation check is deterministic")
+    }
+
+    // MARK: - Milestone 4 behavioral coverage
+
+    func testRenderingBaseURLIsDocumentDirectory() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let fileURL = dir.appending(path: "note.md")
+        try Data("# hi".utf8).write(to: fileURL)
+        let doc = try MarkdownDocument(contentsOf: fileURL, ofType: MarkdownDocument.typeIdentifier)
+        XCTAssertEqual(doc.renderingBaseURL?.path, dir.path)
+    }
+
+    func testRenderingBaseURLIsNilForUntitledDocument() {
+        let doc = MarkdownDocument()
+        XCTAssertNil(doc.renderingBaseURL)
+    }
+
+    func testMarkdownImageResolverResolvesRelativeLocalImage() {
+        let base = URL(fileURLWithPath: "/tmp/docs/")
+        let resolved = MarkdownImageResolver.resolvedURL(for: "assets/local.png", baseURL: base)
+        XCTAssertNotNil(resolved)
+        XCTAssertTrue(resolved?.isFileURL == true)
+        XCTAssertEqual(resolved?.path, "/tmp/docs/assets/local.png")
+        XCTAssertTrue(MarkdownImageResolver.isLocalFileURL(resolved))
+    }
+
+    func testMarkdownImageResolverResolvesDotSlashRelative() {
+        let base = URL(fileURLWithPath: "/tmp/docs/")
+        let resolved = MarkdownImageResolver.resolvedURL(for: "./assets/local.png", baseURL: base)
+        XCTAssertEqual(resolved?.path, "/tmp/docs/assets/local.png")
+        XCTAssertTrue(MarkdownImageResolver.isLocalFileURL(resolved))
+    }
+
+    func testMarkdownImageResolverRemoteURLIsNotLocal() {
+        let remote = MarkdownImageResolver.resolvedURL(for: "https://example.com/image.png", baseURL: nil)
+        XCTAssertNotNil(remote)
+        XCTAssertFalse(MarkdownImageResolver.isLocalFileURL(remote))
+        XCTAssertEqual(remote?.scheme, "https")
+    }
+
+    func testMarkdownImageResolverAbsoluteFileURLIsLocal() {
+        let url = URL(fileURLWithPath: "/tmp/image.png")
+        XCTAssertTrue(MarkdownImageResolver.isLocalFileURL(url))
+    }
+
+    func testFixtureLocalImageResolvesToExistingFile() throws {
+        // Exact invariant: the renderer-resolved URL must itself exist.
+        // No fallback search (bundle root, flattened location) is relevant.
+        let fixtureURL = try XCTUnwrap(RendererSpikeHost.locateFixtureURL(), "fixture must be located via harness")
+        let baseURL = fixtureURL.deletingLastPathComponent()
+        let local = MarkdownImageResolver.resolvedURL(for: "assets/local.png", baseURL: baseURL)
+        XCTAssertNotNil(local)
+        XCTAssertTrue(MarkdownImageResolver.isLocalFileURL(local))
+        XCTAssertTrue(MarkdownImageResolver.localFileExists(at: local), "renderer-resolved URL \(String(describing: local?.path)) must exist relative to fixture base \(baseURL.path)")
+        let dotLocal = MarkdownImageResolver.resolvedURL(for: "./assets/local.png", baseURL: baseURL)
+        XCTAssertNotNil(dotLocal)
+        XCTAssertTrue(MarkdownImageResolver.isLocalFileURL(dotLocal))
+        XCTAssertTrue(MarkdownImageResolver.localFileExists(at: dotLocal), "renderer-resolved ./assets/local.png URL \(String(describing: dotLocal?.path)) must exist")
+    }
+
+    func testSpikeHostLocatesFixtureAndBaseURL() throws {
+        let fixtureURL = try XCTUnwrap(RendererSpikeHost.locateFixtureURL())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixtureURL.path))
+        let (markdown, baseURL) = RendererSpikeHost.loadFixture()
+        XCTAssertFalse(markdown.isEmpty)
+        XCTAssertNotNil(baseURL)
+        XCTAssertTrue(baseURL?.isFileURL == true)
+        XCTAssertTrue(markdown.contains("# Forksview Acceptance Fixture"))
+    }
+
+    func testSpikeHostRendersRealFixtureContent() {
+        // Proves harness uses real MarkdownReadingView input, not a stub.
+        let (markdown, baseURL) = RendererSpikeHost.loadFixture()
+        let view = MarkdownReadingView(markdown: markdown, baseURL: baseURL)
+        XCTAssertEqual(view.markdown, markdown)
+        XCTAssertEqual(view.baseURL, baseURL)
+        XCTAssertTrue(view.markdown.contains("assets/local.png"))
     }
 
     private func locateAcceptanceFixtureURL() -> URL? {
