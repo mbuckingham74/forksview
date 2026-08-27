@@ -67,6 +67,7 @@ struct MarkdownTextView: NSViewRepresentable {
         weak var textView: NSTextView?
         var outline: [DocumentOutlineItem] = []
         private var isSynchronizingText = false
+        private var lastHandledNavigationToken: UUID?
 
         init(document: MarkdownDocument) {
             self.document = document
@@ -112,6 +113,9 @@ struct MarkdownTextView: NSViewRepresentable {
             guard let textView, let document else { return }
             // Only handle when editing mode is active; caller already checks, but double-check
             guard document.presentationMode == .editing else { return }
+            // Navigation requests are transient events. Do not replay the same event when
+            // document.text changes and SwiftUI calls updateNSView again during typing.
+            guard request.token != lastHandledNavigationToken else { return }
             // Stale check
             if OutlineRenderedResolver.isStale(request: request, outline: outline) { return }
             // Resolve outline item from anchor offset
@@ -122,6 +126,9 @@ struct MarkdownTextView: NSViewRepresentable {
             let clampedLoc = max(0, min(targetRange.location, maxLen))
             let clampedLen = 0 // zero-length caret at heading start per spec
             let caret = NSRange(location: clampedLoc, length: clampedLen)
+            // Keep navigation separate from the user's preceding typing group so a
+            // subsequent native undo removes only edits made after navigation.
+            textView.breakUndoCoalescing()
             // Ensure we don't register undo or dirty: selection change doesn't affect undo.
             // Use undoManager disable just in case scroll or selection triggers anything
             let um = textView.undoManager
@@ -137,6 +144,7 @@ struct MarkdownTextView: NSViewRepresentable {
             } else if let window = document.windowControllers.first?.window {
                 window.makeFirstResponder(textView)
             }
+            lastHandledNavigationToken = request.token
             // Do not update change count or register undo; caret move is presentation only.
         }
 
