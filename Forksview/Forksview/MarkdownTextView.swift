@@ -5,11 +5,26 @@ import SwiftUI
 protocol MarkdownTextEditing: AnyObject {
     func breakUndoCoalescing()
     func selectedRange() -> NSRange
+    func handleNavigation(_ request: DocumentNavigationRequest, outline: [DocumentOutlineItem])
 }
 
 @MainActor
 struct MarkdownTextView: NSViewRepresentable {
     @ObservedObject var document: MarkdownDocument
+    var outline: [DocumentOutlineItem] = []
+    @Binding var navigationRequest: DocumentNavigationRequest?
+
+    init(document: MarkdownDocument) {
+        self.document = document
+        self.outline = DocumentOutlineParser.outline(from: document.text)
+        self._navigationRequest = .constant(nil)
+    }
+
+    init(document: MarkdownDocument, outline: [DocumentOutlineItem], navigationRequest: Binding<DocumentNavigationRequest?>) {
+        self.document = document
+        self.outline = outline
+        self._navigationRequest = navigationRequest
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(document: document)
@@ -18,7 +33,6 @@ struct MarkdownTextView: NSViewRepresentable {
     func makeNSView(context: Context) -> MarkdownTextEditorScrollView {
         let scrollView = MarkdownTextEditorScrollView()
         context.coordinator.connect(to: scrollView.textView)
-        // Initial text load must not register undo; document's manager should remain clean.
         let undoManager = scrollView.textView.undoManager
         undoManager?.disableUndoRegistration()
         if scrollView.textView.string != document.text {
@@ -30,6 +44,15 @@ struct MarkdownTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: MarkdownTextEditorScrollView, context: Context) {
         context.coordinator.synchronizeTextView(with: document.text)
+        // Update coordinator's outline and document reference for navigation handling
+        context.coordinator.outline = outline
+        context.coordinator.document = document
+        if let req = navigationRequest, document.presentationMode == .editing {
+            // Stale check: if anchor no longer exists, ignore
+            if !OutlineRenderedResolver.isStale(request: req, outline: outline) {
+                context.coordinator.handleNavigation(req, outline: outline)
+            }
+        }
     }
 
     static func dismantleNSView(
@@ -40,8 +63,9 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, MarkdownTextEditing, NSTextViewDelegate {
-        private weak var document: MarkdownDocument?
-        private weak var textView: NSTextView?
+        weak var document: MarkdownDocument?
+        weak var textView: NSTextView?
+        var outline: [DocumentOutlineItem] = []
         private var isSynchronizingText = false
 
         init(document: MarkdownDocument) {
@@ -74,7 +98,6 @@ struct MarkdownTextView: NSViewRepresentable {
             guard let textView, textView.string != text else {
                 return
             }
-
             isSynchronizingText = true
             let undoManager = textView.undoManager
             undoManager?.disableUndoRegistration()
@@ -85,17 +108,45 @@ struct MarkdownTextView: NSViewRepresentable {
             textView.string = text
         }
 
+        func handleNavigation(_ request: DocumentNavigationRequest, outline: [DocumentOutlineItem]) {
+            guard let textView, let document else { return }
+            // Only handle when editing mode is active; caller already checks, but double-check
+            guard document.presentationMode == .editing else { return }
+            // Stale check
+            if OutlineRenderedResolver.isStale(request: request, outline: outline) { return }
+            // Resolve outline item from anchor offset
+            guard let item = outline.first(where: { $0.sourceRange.location == request.anchor.offset }) else { return }
+            let targetRange = item.sourceRange
+            let maxLen = (textView.string as NSString).length
+            // Clamp location and length
+            let clampedLoc = max(0, min(targetRange.location, maxLen))
+            let clampedLen = 0 // zero-length caret at heading start per spec
+            let caret = NSRange(location: clampedLoc, length: clampedLen)
+            // Ensure we don't register undo or dirty: selection change doesn't affect undo.
+            // Use undoManager disable just in case scroll or selection triggers anything
+            let um = textView.undoManager
+            um?.disableUndoRegistration()
+            textView.setSelectedRange(caret)
+            textView.scrollRangeToVisible(caret)
+            um?.enableUndoRegistration()
+            // Restore first responder to native NSTextView
+            if let window = textView.window {
+                if window.firstResponder !== textView {
+                    window.makeFirstResponder(textView)
+                }
+            } else if let window = document.windowControllers.first?.window {
+                window.makeFirstResponder(textView)
+            }
+            // Do not update change count or register undo; caret move is presentation only.
+        }
+
         func textDidChange(_ notification: Notification) {
             guard !isSynchronizingText, let textView, let document else {
                 return
             }
-
             let newText = textView.string
             guard newText != document.text else { return }
             document.replaceText(with: newText)
-            // NSDocument automatically observes its UndoManager and updates
-            // isDocumentEdited / changeCount on grouping and undo/redo.
-            // No manual updateChangeCount required.
         }
 
         func breakUndoCoalescing() {

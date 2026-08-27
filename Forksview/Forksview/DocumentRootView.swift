@@ -1,40 +1,47 @@
 import SwiftUI
 import AppKit
 
-/// Milestone 5: Single source-of-truth container that toggles between
+/// Milestone 5+7: Single source-of-truth container that toggles between
 /// MarkdownReadingView (rendered) and MarkdownTextView (native NSTextView).
 /// Owns no second copy of text — both branches observe `document.text`.
 /// Mode is window/document presentation state, default reading.
 ///
-/// Position preservation (M5 minimal):
-/// - Editing -> Reading captures source offset + nearest heading as DocumentAnchor
-///   stored transiently on MarkdownDocument (semantic over pixels).
+/// Position preservation (M7 improved):
+/// - Editing -> Reading uses real outline parser for nearest heading anchor,
+///   then reading scrolls to rendered heading occurrence.
 /// - Reading -> Editing restores pendingEditingSelection via NSTextView.
-/// - Reading scroll precise heading-scroll is deferred to M7 outline infrastructure;
-///   current reading ScrollView remains at top on toggle, but editing cursor is preserved.
-///   This is the smallest safe transitional behavior documented per spec.
-///
-/// Lifecycle fix (M5 remediation):
-/// The native editor is retained across presentation switches. Instead of destroying/
-/// recreating the NSTextView via conditional branches, both views always exist and
-/// visibility/interactivity is controlled via opacity/hitTesting/accessibility.
-/// This preserves native NSTextView undo registrations (which target the specific
-/// textStorage) and selection, while keeping single source of truth on document.text.
+/// - Outline navigation is handled via transient navigationRequest that
+///   routes to reading (scroll) or editing (caret) without mode switch.
+/// Lifecycle: native editor retained across switches via opacity.
 @MainActor
 struct DocumentRootView: View {
     @ObservedObject var document: MarkdownDocument
+    var outline: [DocumentOutlineItem] = []
+    @Binding var navigationRequest: DocumentNavigationRequest?
+
+    // Legacy init for existing call sites without outline/navigation
+    init(document: MarkdownDocument) {
+        self.document = document
+        self.outline = DocumentOutlineParser.outline(from: document.text)
+        self._navigationRequest = .constant(nil)
+    }
+
+    init(document: MarkdownDocument, outline: [DocumentOutlineItem], navigationRequest: Binding<DocumentNavigationRequest?>) {
+        self.document = document
+        self.outline = outline
+        self._navigationRequest = navigationRequest
+    }
 
     var body: some View {
         ZStack {
             // Native editor always exists — hidden in reading mode.
-            // Persistent instance preserves undo history and selection across mode switches.
-            MarkdownTextView(document: document)
+            MarkdownTextView(document: document, outline: outline, navigationRequest: $navigationRequest)
                 .opacity(document.presentationMode == .editing ? 1 : 0)
                 .allowsHitTesting(document.presentationMode == .editing)
                 .accessibilityHidden(document.presentationMode == .reading)
 
             // Reading view always exists — hidden in editing mode.
-            MarkdownReadingView(markdown: document.text, baseURL: document.renderingBaseURL)
+            MarkdownReadingView(markdown: document.text, baseURL: document.renderingBaseURL, outline: outline, navigationRequest: $navigationRequest)
                 .opacity(document.presentationMode == .reading ? 1 : 0)
                 .allowsHitTesting(document.presentationMode == .reading)
                 .accessibilityHidden(document.presentationMode == .editing)
@@ -42,7 +49,6 @@ struct DocumentRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: document.presentationMode) { _, newMode in
             if newMode == .reading {
-                // Relinquish first responder when entering reading
                 let window = document.windowControllers.first?.window ?? NSApp.keyWindow
                 if let window, window.firstResponder is NSTextView {
                     window.makeFirstResponder(nil)
@@ -50,10 +56,7 @@ struct DocumentRootView: View {
                     NSApp.keyWindow?.makeFirstResponder(nil)
                 }
             } else {
-                // Return focus to editor when entering editing — deferred to next runloop
-                // so the editor is hittable and window is key.
                 DispatchQueue.main.async {
-                    // Prefer document's window; fallback to keyWindow
                     let window = document.windowControllers.first?.window ?? NSApp.keyWindow
                     guard let window else { return }
                     if let textView = findTextView(in: window) {

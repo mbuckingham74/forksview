@@ -132,6 +132,8 @@
 			);
 			name = Forksview;
 			packageProductDependencies = (
+				B2C3D4E5F6A7B8C9D0E1F2A3 /* cmark-gfm */,
+				C3D4E5F6A7B8C9D0E1F2A3B4 /* cmark-gfm-extensions */,
 				612E151CC4159191D33FEBB9 /* MarkdownUI */,
 			);
 			productName = Forksview;
@@ -213,6 +215,7 @@
 			mainGroup = 2D6E5BFE303D4C0900B7AFF2;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				A1B2C3D4E5F6A7B8C9D0E1F2 /* XCRemoteSwiftPackageReference "swift-cmark" */,
 				ECFBD928D8FF3072A90F2C23 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -597,6 +600,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		A1B2C3D4E5F6A7B8C9D0E1F2 /* XCRemoteSwiftPackageReference "swift-cmark" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swiftlang/swift-cmark";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.8.0;
+			};
+		};
 		ECFBD928D8FF3072A90F2C23 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui";
@@ -608,6 +619,16 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		B2C3D4E5F6A7B8C9D0E1F2A3 /* cmark-gfm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F6A7B8C9D0E1F2 /* XCRemoteSwiftPackageReference "swift-cmark" */;
+			productName = "cmark-gfm";
+		};
+		C3D4E5F6A7B8C9D0E1F2A3B4 /* cmark-gfm-extensions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D4E5F6A7B8C9D0E1F2 /* XCRemoteSwiftPackageReference "swift-cmark" */;
+			productName = "cmark-gfm-extensions";
+		};
 		612E151CC4159191D33FEBB9 /* MarkdownUI */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = ECFBD928D8FF3072A90F2C23 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
