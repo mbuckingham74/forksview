@@ -24,6 +24,34 @@ MarkdownUI 2.4.1 is the latest stable release (maintenance mode, not deprecated;
 
 **Selected: MarkdownUI 2.4.1** via `https://github.com/gonzalezreal/swift-markdown-ui` (`upToNextMajorVersion` 2.4.1, product `MarkdownUI`). It provides GFM headings, emphasis, links, lists including task lists, blockquotes, fenced code, tables, and images (local via `baseURL`, remote via NetworkImage), selectable text (`.textSelection(.enabled)`), clickable links, sensible code blocks and tables via the built-in `gitHub` theme, dark/light appearance, and reasonable long-document behavior inside a `ScrollView`. The dependency is isolated behind the app-owned `MarkdownReadingView`; `MarkdownDocument` retains no parsing/rendering concerns and native edit mode is untouched. Textual remains a future option once it reaches 1.0 but is not adopted for this spike.
 
+## Milestone 8: Persistent Heading Bookmarks
+
+A Forksview bookmark is a durable app-owned reference to one semantic Markdown heading, and therefore to the section introduced by that heading, in one document. It is not an arbitrary caret, paragraph, scroll coordinate, or workspace item and remains outside the Markdown file.
+
+- **Document ownership:** `MarkdownDocument` owns the open document's `bookmarks: [DocumentBookmark]` collection via `@Published private(set) var bookmarks`. This does not make bookmarks Markdown content. `MarkdownDocument.text -> data(ofType:)` remains the only Markdown serialization path; bookmarks never appear in saved `.md` bytes. The SwiftUI inspector does not own persistence. Bookmarks display as a flat list ordered: resolved bookmarks in current document source order, then stale bookmarks ordered by captured source offset, then UUID for deterministic tie-breaking.
+
+- **Model:** `DocumentBookmark` (`id: UUID`, `target: HeadingBookmarkTarget`) with `HeadingBookmarkTarget` capturing `level`, `title`, `occurrence` (1-based among headings with equal level+title), `matchingHeadingCount`, and `sourceOffsetAtCreation` (UTF-16). `occurrence` and `matchingHeadingCount` distinguish duplicate headings. Captured fields are immutable; current location is recomputed against the current outline.
+
+- **Resolver:** Pure `DocumentBookmarkResolver` with deterministic policy: first exact match on `sourceOffsetAtCreation + level + title`; fallback to equal `level+title` only when current matching count equals captured `matchingHeadingCount`, then select captured `occurrence`. Otherwise stale. No guessing, fuzzy-match, or context snippets.
+
+- **Edit-resilience:** Text inserted above or unique heading moved resolves at new offset; heading renamed or deleted becomes stale; duplicate cardinality changes conservatively produce stale.
+
+- **Persistence:** `DocumentBookmarkStore` uses one versioned Codable JSON archive (`BookmarkArchive` schemaVersion 1) at `~/Library/Application Support/org.mzb74.Forksview/Bookmarks.json` located via Foundation `urls(for: .applicationSupportDirectory)`, atomically written. Envelope: `BookmarkArchive` + `PersistedDocumentBookmarks` (`id`, `fileBookmarkData`, `lastKnownPath`, `bookmarks`).
+
+- **File identity:** Normal Foundation URL bookmark data (not security-scoped), created with `url.bookmarkData(options: [], ...)` and resolved with `.withoutUI` `.withoutMounting`. Stale data refreshed. `lastKnownPath` is diagnostic only; path is not primary identity.
+
+- **Bounded behavior:** Rename/move on same filesystem resolves via Foundation bookmark; Save As clones bookmark set to destination and binds active document to destination while original keeps its record; Finder copy creates new identity; deleted/unavailable file does not auto-delete records; untitled bookmarks exist in-memory and bind on first save; never-saved untitled discards bookmarks; corrupt/unknown schema archives are preserved, fail nonfatally, and do not overwrite with empty archive.
+
+- **Testability:** Store supports injected archive URL and test-only launch environment override `FORKSVIEW_BOOKMARK_ARCHIVE_PATH` (and `FORKSVIEW_BOOKMARKS_PATH`) for isolated persistence/relaunch UI tests. No production-visible setting.
+
+- **UI:** Outline rows gain trailing bookmark toggle (`bookmark` / `bookmark.fill`); Bookmarks section shows resolved rows with clickable title navigation and trailing remove, stale rows disabled (`unavailable`) but removable, empty state `No bookmarks yet` preserved. Accessibility identifiers: `bookmarksSection`, `documentBookmarks`, `documentBookmarksEmptyState`, `documentBookmarkToggle-<offset>`, `documentBookmarkItem-<uuid>`, `removeDocumentBookmark-<uuid>`.
+
+- **Navigation:** Bookmark row navigates by resolving against current outline to `DocumentAnchor(from: resolvedOutlineItem)` → fresh `DocumentNavigationRequest` → `DocumentRootView` → reading (scroll) or editing (caret, scroll, focus) via existing M7 route; presentation mode unchanged; `DocumentNavigationRequest` unmodified; no parallel navigation system.
+
+- **Dirty/Undo boundary:** `addBookmark` / `removeBookmark` / `toggleBookmark` and navigation do not change `text`, call `updateChangeCount`, set dirty, register with `undoManager`, or create save sheets. Bookmark Undo deferred (no second Undo system).
+
+- **Multi-document isolation:** Two open documents maintain independent bookmark collections; persistence store may be shared internally but mutations are scoped per document record; two untitled documents have independent session bookmarks; no global bookmark UI.
+
 ## Milestone order
 
 1. Configuration and document skeleton

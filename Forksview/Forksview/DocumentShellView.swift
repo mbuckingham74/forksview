@@ -44,11 +44,25 @@ struct DocumentShellView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .inspector(isPresented: $isInspectorPresented) {
-            DocumentInspectorPlaceholderView(outline: outline) { item in
-                // Discard stale? Shell checks stale on navigation side, but we can still create request
-                // Token ensures same row twice produces new event
-                navigationRequest = DocumentNavigationRequest(anchor: DocumentAnchor(from: item))
-            }
+            DocumentInspectorPlaceholderView(
+                outline: outline,
+                bookmarks: document.bookmarks,
+                onSelect: { item in
+                    navigationRequest = DocumentNavigationRequest(anchor: DocumentAnchor(from: item))
+                },
+                onToggleBookmark: { item in
+                    document.toggleBookmark(for: item, in: outline)
+                },
+                onSelectBookmark: { bookmark in
+                    if case let .resolved(item) = DocumentBookmarkResolver.resolve(bookmark, in: outline) {
+                        // Reuse exact existing M7 route: bookmark -> resolvedOutlineItem -> DocumentAnchor -> fresh navigationRequest
+                        navigationRequest = DocumentNavigationRequest(anchor: DocumentAnchor(from: item))
+                    }
+                },
+                onRemoveBookmark: { bookmark in
+                    document.removeBookmark(id: bookmark.id)
+                }
+            )
             .inspectorColumnWidth(min: 220, ideal: 260, max: 360)
         }
         .toolbar { toolbarContent }

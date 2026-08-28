@@ -69,8 +69,8 @@ final class DocumentOutlineUITests: XCTestCase {
         XCTAssertTrue(readingView(in: app).waitForExistence(timeout: 5))
         XCTAssertTrue(inspector(in: app).waitForExistence(timeout: 2))
         XCTAssertTrue(outline(in: app).waitForExistence(timeout: 2))
-        // Verify rows exist in order via button labels
-        let buttons = outline(in: app).buttons
+        // Verify rows exist in order via button labels (filter to outline items only, not bookmark toggles)
+        let buttons = outline(in: app).buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "documentOutlineItem-"))
         // Should have 4 headings
         XCTAssertTrue(buttons.count >= 4, "expected at least 4 outline buttons, got \(buttons.count)")
         // Check ordering by accessibility label prefix
@@ -137,7 +137,7 @@ final class DocumentOutlineUITests: XCTestCase {
         XCTAssertTrue(readingView(in: app).waitForExistence(timeout: 5))
         let outlineEl = outline(in: app)
         XCTAssertTrue(outlineEl.waitForExistence(timeout: 2))
-        let buttons = outlineEl.buttons.matching(NSPredicate(format: "label CONTAINS 'Installation'"))
+        let buttons = outlineEl.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "documentOutlineItem-", "Installation"))
         XCTAssertEqual(buttons.count, 2, "two duplicate Installation headings")
         // Buttons should have occurrence labels: 1 of 2 and 2 of 2
         let firstLabel = buttons.element(boundBy: 0).label
@@ -282,13 +282,16 @@ final class DocumentOutlineUITests: XCTestCase {
     }
 
     func testBookmarksPlaceholderUnchanged() throws {
+        // Milestone 8: Bookmarks is now functional, but empty state still shows placeholder.
         let app = makeApplication()
         app.launchArguments = ["-ApplePersistenceIgnoreState", "YES"]
         app.launch()
         XCTAssertTrue(readingView(in: app).waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Bookmarks"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["No bookmarks yet"].exists)
-        // Ensure no bookmark behavior added: clicking bookmarks shouldn't navigate
-        XCTAssertFalse(app.buttons.matching(identifier: "bookmarkButton").firstMatch.exists, "no bookmark buttons should exist")
+        // In M8, empty state identifier should exist and no bookmark items should be present
+        XCTAssertTrue(app.descendants(matching: .any)["documentBookmarksEmptyState"].waitForExistence(timeout: 2))
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "documentBookmarkItem-")).count, 0)
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "removeDocumentBookmark-")).count, 0)
     }
 }
