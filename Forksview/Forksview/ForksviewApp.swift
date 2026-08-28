@@ -19,7 +19,8 @@ enum ForksviewApp {
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
-        _ = NSDocumentController.shared
+        let controller = NSDocumentController.shared
+        controller.autosavingDelay = 30
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         let fileURLs: [URL] = CommandLine.arguments.dropFirst().compactMap { arg in
@@ -144,6 +145,9 @@ private enum MainMenu {
 
         let saveAs = menu.addItem(withTitle: "Save As…", action: #selector(NSDocument.saveAs(_:)), keyEquivalent: "s")
         saveAs.keyEquivalentModifierMask = [.command, .shift]
+
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Revert to Saved", action: #selector(NSDocument.revertToSaved(_:)), keyEquivalent: "r")
         return item
     }
 

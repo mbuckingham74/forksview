@@ -82,6 +82,19 @@ struct DocumentShellView: View {
                 }
             }
         }
+        .onChange(of: document.externalReloadNavigationRequest) { _, newReq in
+            if let req = newReq {
+                navigationRequest = req
+                // Clear after forwarding on the next main-actor turn so the
+                // request remains a transient M7 navigation event.
+                Task { @MainActor in
+                    await Task.yield()
+                    if document.externalReloadNavigationRequest?.token == req.token {
+                        document.externalReloadNavigationRequest = nil
+                    }
+                }
+            }
+        }
     }
 
     private func toggleSidebar() {

@@ -9,7 +9,14 @@ final class MarkdownDocument: NSDocument, ObservableObject {
     @Published private(set) var text = ""
     @Published var presentationMode: DocumentPresentationMode = .reading
     @Published private(set) var bookmarks: [DocumentBookmark] = []
+    @Published var externalReloadNavigationRequest: DocumentNavigationRequest?
     private weak var textEditor: (any MarkdownTextEditing)?
+    // Test hook for error presentation verification
+    var lastPresentedErrorForTesting: Error?
+
+    // MARK: - Autosave policy (Milestone 9)
+    nonisolated override class var autosavesInPlace: Bool { false }
+    override class var autosavesDrafts: Bool { false }
 
     // MARK: - Bookmark Store
 
@@ -42,13 +49,18 @@ final class MarkdownDocument: NSDocument, ObservableObject {
     var lastAnchor: DocumentAnchor?
     var pendingEditingSelection: NSRange?
 
-    // Track fileURL changes for bookmark binding
-    private var observedFileURL: URL?
-    private var isHandlingSave = false
+    // MARK: - M9 External-change state (instance-scoped)
+    private var pendingExternalChangeScheduled = false
+    private var hasPendingExternalConflict = false
+    private var isHandlingExternalReload = false
+    private var lastHandledExternalFileModificationDate: Date?
+    private var pendingExternalReloadAnchor: DocumentAnchor?
+    private var pendingExternalReloadSelection: NSRange?
 
     override func makeWindowControllers() {
         // Ensure bookmarks loaded before UI shows
         loadBookmarksIfNeeded()
+        markCurrentFileModificationDateAsHandled()
         let shellView = DocumentShellView(document: self)
         let hostingController = NSHostingController(rootView: shellView)
         let window = NSWindow(contentViewController: hostingController)
@@ -70,47 +82,6 @@ final class MarkdownDocument: NSDocument, ObservableObject {
         }
     }
 
-    // Override fileURL to observe changes for bookmark binding
-    // NSDocument.fileURL is NS_SWIFT_NONISOLATED, so override must be nonisolated.
-    nonisolated override var fileURL: URL? {
-        didSet {
-            if oldValue != fileURL {
-                let old = oldValue
-                let new = fileURL
-                Task { @MainActor [weak self] in
-                    self?.handleFileURLChange(from: old, to: new)
-                }
-            }
-        }
-    }
-
-    private func handleFileURLChange(from old: URL?, to new: URL?) {
-        // Avoid handling during save handling where we manage explicitly
-        if isHandlingSave { return }
-        if old == nil, let newURL = new {
-            // First save of untitled: persist current session bookmarks, or load if empty
-            if !bookmarks.isEmpty {
-                bookmarkStore.saveBookmarks(bookmarks, for: newURL)
-            } else {
-                let loaded = bookmarkStore.loadBookmarks(for: newURL)
-                if loaded != bookmarks {
-                    bookmarks = loaded
-                }
-            }
-            observedFileURL = newURL
-        } else if let newURL = new {
-            // Regular file URL change (open, or Save As completed elsewhere)
-            let loaded = bookmarkStore.loadBookmarks(for: newURL)
-            if loaded != bookmarks {
-                bookmarks = loaded
-            }
-            observedFileURL = newURL
-        } else {
-            // Became untitled (should not happen after save, but handle)
-            observedFileURL = nil
-        }
-    }
-
     private func loadBookmarksIfNeeded() {
         guard let url = fileURL else {
             // Untitled: keep session bookmarks (initially empty)
@@ -120,7 +91,6 @@ final class MarkdownDocument: NSDocument, ObservableObject {
         if loaded != bookmarks {
             bookmarks = loaded
         }
-        observedFileURL = url
     }
 
     @objc func togglePresentationMode(_ sender: Any?) {
@@ -254,55 +224,397 @@ final class MarkdownDocument: NSDocument, ObservableObject {
         DocumentBookmarkResolver.isBookmarked(item: item, bookmarks: bookmarks, outline: outline)
     }
 
-    // MARK: - Save Handling for Bookmarks
+    // MARK: - Save Handling for Bookmarks (Milestone 9 discriminator)
 
     override func save(to url: URL, ofType typeName: String, for saveOperation: SaveOperationType, completionHandler: @escaping (Error?) -> Void) {
         let oldURL = fileURL
-        isHandlingSave = true
         super.save(to: url, ofType: typeName, for: saveOperation) { [weak self] error in
             guard let self = self else {
                 completionHandler(error)
                 return
             }
             Task { @MainActor in
-                defer { self.isHandlingSave = false }
                 if error == nil {
+                    self.markCurrentFileModificationDateAsHandled()
                     switch saveOperation {
+                    case .saveOperation:
+                        if oldURL == nil {
+                            // First explicit save of untitled (via saveOperation): bind session bookmarks
+                            self.bookmarkStore.saveBookmarks(self.bookmarks, for: url)
+                        } else {
+                            // Normal save to same file: no clone, just ensure no side effects
+                            break
+                        }
                     case .saveAsOperation:
                         if let old = oldURL {
-                            // Clone source to destination
+                            // Clone source record to destination, then ensure current in-memory bookmarks win
                             self.bookmarkStore.handleSaveAs(from: old, to: url)
-                            // Also ensure current in-memory bookmarks are saved to destination (if they differ from source record)
                             self.bookmarkStore.saveBookmarks(self.bookmarks, for: url)
                         } else {
                             // Untitled Save As (first save): persist session bookmarks
                             self.bookmarkStore.saveBookmarks(self.bookmarks, for: url)
                         }
-                        // Reload to bind to destination
-                        let loaded = self.bookmarkStore.loadBookmarks(for: url)
-                        // If we just saved, loaded should equal bookmarks, but ensure binding
-                        if loaded != self.bookmarks {
-                            // If store's clone was source's saved bookmarks, but current session had extra unsaved bookmarks, we already saved above, so keep current
-                            // Only update if loaded differs and we didn't just save current
-                        }
-                        self.observedFileURL = url
-                    case .saveOperation:
-                        if oldURL == nil {
-                            // First save of untitled via saveOperation (not saveAs) — treat same as saveAs
-                            self.bookmarkStore.saveBookmarks(self.bookmarks, for: url)
-                            self.observedFileURL = url
-                        } else {
-                            // Regular save: fileURL same, ensure bookmarks persisted? Already persisted on change, but refresh lastKnownPath if needed
-                            if self.fileURL != nil {
-                                // Ensure store has correct path (for rename via save)
-                            }
-                        }
-                    default:
+                    case .saveToOperation:
+                        // Export/copy: no bookmark mutation, fileURL unchanged
                         break
+                    case .autosaveElsewhereOperation:
+                        // Recovery autosave: no bookmark mutation, fileURL unchanged, do not touch conflict identity
+                        break
+                    case .autosaveInPlaceOperation:
+                        // Unreachable under policy: no side effects
+                        break
+                    case .autosaveAsOperation:
+                        // Unreachable because autosavesDrafts false: no side effects
+                        break
+                    @unknown default:
+                        break
+                    }
+                    if oldURL != self.fileURL {
+                        // fileURL is NS_SWIFT_NONISOLATED and is not observable through
+                        // ObservableObject. Refresh views that derive relative resources
+                        // from the document's current location.
+                        self.objectWillChange.send()
                     }
                 }
                 completionHandler(error)
             }
+        }
+    }
+
+    // MARK: - NSDocument change count handling for M9
+
+    override func updateChangeCount(_ change: NSDocument.ChangeType) {
+        super.updateChangeCount(change)
+        // If undo returned a dirty document with pending external change back to clean, schedule reload
+        if hasPendingExternalConflict && !isDocumentEdited && !isHandlingExternalReload {
+            hasPendingExternalConflict = false
+            scheduleExternalChangeHandling()
+        }
+    }
+
+    // MARK: - External change detection (Milestone 9)
+
+    nonisolated override func presentedItemDidChange() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // NSDocument's presenter bookkeeping and the state decision both run
+            // on the document actor, while this callback remains lightweight.
+            if self.isDocumentEdited {
+                self.hasPendingExternalConflict = true
+            }
+            self.invokeSuperPresentedItemDidChange()
+            if self.isDocumentEdited {
+                // Recheck after native bookkeeping in case it changed the count.
+                self.hasPendingExternalConflict = true
+                return
+            }
+            guard self.currentPresentedFileModificationDate() != self.lastHandledExternalFileModificationDate else {
+                return
+            }
+            self.scheduleExternalChangeHandling()
+        }
+    }
+
+    nonisolated override func presentedItemDidMove(to newURL: URL) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // NSDocument owns the fileURL transition. Invoke its native move
+            // implementation on the document actor before the small bookmark
+            // and rendering adapters below.
+            self.invokeSuperPresentedItemDidMove(to: newURL)
+            // NSDocument has already adopted newURL. Refresh only the existing
+            // Foundation URL-bookmark record; never replace the live collection.
+            if !self.bookmarks.isEmpty || self.bookmarkStore.containsRecord(for: newURL) {
+                self.bookmarkStore.saveBookmarks(self.bookmarks, for: newURL)
+            }
+            self.markCurrentFileModificationDateAsHandled()
+            self.objectWillChange.send()
+        }
+    }
+
+    private func invokeSuperPresentedItemDidChange() {
+        super.presentedItemDidChange()
+    }
+
+    private func invokeSuperPresentedItemDidMove(to newURL: URL) {
+        super.presentedItemDidMove(to: newURL)
+    }
+
+    private func markCurrentFileModificationDateAsHandled() {
+        lastHandledExternalFileModificationDate = currentPresentedFileModificationDate()
+    }
+
+    private func currentPresentedFileModificationDate() -> Date? {
+        guard let fileURL else {
+            return fileModificationDate
+        }
+        return (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.modificationDate]) as? Date
+            ?? fileModificationDate
+    }
+
+    nonisolated override func accommodatePresentedItemDeletion(completionHandler: @escaping (Error?) -> Void) {
+        // Acknowledge the native deletion immediately so NSDocument does not close
+        // the document. The presenter callback itself must not wait on MainActor.
+        completionHandler(nil)
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            // The default NSDocument implementation closes the document. M9 keeps
+            // the document open and retains its in-memory source instead.
+            self.hasPendingExternalConflict = self.isDocumentEdited
+        }
+    }
+
+    private func scheduleExternalChangeHandling() {
+        if isHandlingExternalReload { return }
+        if pendingExternalChangeScheduled { return }
+        pendingExternalChangeScheduled = true
+        Task { @MainActor [weak self] in
+            // Coalesce: yield to runloop to allow duplicates to collapse
+            // Use async to coalesce rapid external writes
+            await Task.yield()
+            guard let self else { return }
+            self.pendingExternalChangeScheduled = false
+            // Guard against untitled, a presenter callback produced by our own
+            // revert, or a deleted/unavailable file.
+            guard !self.isHandlingExternalReload else { return }
+            guard let fileURL = self.fileURL else { return }
+            guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+            // Re-check dirty state immediately before deciding
+            if self.isDocumentEdited {
+                // Dirty: record pending conflict, preserve local state, do not reload
+                self.hasPendingExternalConflict = true
+                return
+            } else {
+                guard self.currentPresentedFileModificationDate() != self.lastHandledExternalFileModificationDate else {
+                    return
+                }
+                // Clean: perform external reload
+                self.hasPendingExternalConflict = false
+                await self.performCleanExternalReload(from: fileURL)
+            }
+        }
+    }
+
+    private func performCleanExternalReload(from fileURL: URL) async {
+        // Preserve presentationMode and capture selection/anchor
+        let preservedMode = presentationMode
+        let oldOutline = DocumentOutlineParser.outline(from: text)
+        var capturedAnchor: DocumentAnchor?
+        var capturedSelection: NSRange?
+
+        if presentationMode == .editing, let editor = textEditor {
+            let sel = editor.selectedRange()
+            capturedSelection = sel
+            capturedAnchor = DocumentAnchor.anchor(for: sel.location, in: text)
+        } else if let anchor = lastAnchor {
+            capturedAnchor = anchor
+            // For reading mode, selection not relevant, but keep anchor
+        } else {
+            // Fallback: derive anchor from start
+            capturedAnchor = DocumentAnchor.anchor(for: 0, in: text)
+        }
+        let capturedRelativeOffset: Int? = {
+            guard let anchor = capturedAnchor,
+                  let heading = anchor.heading,
+                  let level = anchor.level,
+                  let oldHeading = DocumentOutlineParser.nearestHeading(for: anchor.offset, in: oldOutline),
+                  oldHeading.title == heading,
+                  oldHeading.level == level else {
+                return nil
+            }
+            return max(0, anchor.offset - oldHeading.sourceRange.location)
+        }()
+
+        // Also capture heading-relative position for fallback: we already have anchor
+        pendingExternalReloadAnchor = capturedAnchor
+        pendingExternalReloadSelection = capturedSelection
+
+        let typeName = fileType ?? Self.typeIdentifier
+        isHandlingExternalReload = true
+        defer { isHandlingExternalReload = false }
+
+        // Use native revert toContentsOf:ofType:
+        // Use completionHandler variant to handle success/failure without blocking
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            // NSDocument revert has a synchronous throws version and async completionHandler version
+            // We use the async one via revert(toContentsOf:ofType:completionHandler:) if available
+            // Fallback to synchronous in Task: try revert(toContentsOf:ofType:)
+            // Need to handle invalid UTF-8 error path
+            self.revertWithCompletion(to: fileURL, ofType: typeName) { [weak self] error in
+                guard let self = self else {
+                    continuation.resume()
+                    return
+                }
+                Task { @MainActor in
+                    if let error = error {
+                        // Failed: retain old model, present native document error, do not mutate undo/bookmarks
+                        _ = self.presentError(error)
+                        continuation.resume()
+                        return
+                    }
+                    self.markCurrentFileModificationDateAsHandled()
+                    // Success: text already updated via read(from:ofType:), document remains clean, old undo cleared
+                    // Clear obsolete undo history
+                    self.undoManager?.removeAllActions()
+                    // Synchronize the retained native editor before restoring its
+                    // selection. The coordinator suppresses delegate feedback and
+                    // disables NSTextView undo registration for this replacement.
+                    self.textEditor?.synchronizeTextView(with: self.text)
+                    // Break coalescing appropriately
+                    self.textEditor?.breakUndoCoalescing()
+                    // Clamp and restore selection exactly once
+                    let newLength = (self.text as NSString).length
+                    var targetSelection: NSRange?
+                    var navigationRequestToPublish: DocumentNavigationRequest?
+
+                    // Determine outline after reload for semantic resolution
+                    let newOutline = DocumentOutlineParser.outline(from: self.text)
+
+                    // Resolve captured anchor against new outline
+                    if let anchor = self.pendingExternalReloadAnchor {
+                        // Try exact offset + title match, then fallback via resolver-like logic
+                        // Use DocumentAnchor resolution: find nearest heading for offset, then check if heading still exists
+                        if let heading = anchor.heading, let level = anchor.level {
+                            // Find matching heading in new outline with same level+title that preserves occurrence semantics
+                            let matching = newOutline.filter { $0.level == level && $0.title == heading }
+                            if !matching.isEmpty {
+                                // Check if captured heading still valid (old count == new count ? deterministic)
+                                // For simplicity, if exact previous heading title exists, use its location
+                                // Find exact item that corresponds to anchor.heading
+                                // Prefer exact previous source offset title match if still at same offset, else fallback to occurrence
+                                let exact = newOutline.first(where: { $0.title == heading && $0.level == level && $0.sourceRange.location == anchor.offset })
+                                let resolvedItem: DocumentOutlineItem?
+                                if let exact = exact {
+                                    resolvedItem = exact
+                                } else {
+                                    // Use occurrence derived from anchor? We stored sourceOffsetAtCreation only, but anchor alone doesn't have occurrence.
+                                    // For M9, we can attempt deterministic: if matching count == 1, pick it; otherwise if anchor offset falls within heading block, pick nearest
+                                    // Simpler: pick nearest heading by offset if multiple, but spec says do not guess across ambiguous duplicates.
+                                    // So if matching.count == 1, use it; otherwise stale -> fallback to clamped offset.
+                                    if matching.count == 1 {
+                                        resolvedItem = matching.first
+                                    } else {
+                                        // Ambiguous duplicate: treat as stale, do not guess
+                                        resolvedItem = nil
+                                    }
+                                }
+                                if let item = resolvedItem {
+                                    if preservedMode == .editing {
+                                        let offset = item.sourceRange.location + (capturedRelativeOffset ?? 0)
+                                        let clampedLoc = max(0, min(offset, newLength))
+                                        let clampedLen = max(0, min(capturedSelection?.length ?? 0, newLength - clampedLoc))
+                                        targetSelection = NSRange(location: clampedLoc, length: clampedLen)
+                                    } else {
+                                        // Reading mode: reuse M7 navigation route
+                                        let readingAnchor = DocumentAnchor(from: item)
+                                        navigationRequestToPublish = DocumentNavigationRequest(anchor: readingAnchor)
+                                    }
+                                } else {
+                                    // Fallback to clamped relative offset
+                                    if let sel = capturedSelection, preservedMode == .editing {
+                                        let clampedLoc = max(0, min(sel.location, newLength))
+                                        let clampedLen = max(0, min(sel.length, newLength - clampedLoc))
+                                        targetSelection = NSRange(location: clampedLoc, length: clampedLen)
+                                    } else if preservedMode == .editing {
+                                        let clamped = max(0, min(anchor.offset, newLength))
+                                        targetSelection = NSRange(location: clamped, length: 0)
+                                    }
+                                }
+                            } else {
+                                // Heading no longer exists -> fallback
+                                if let sel = capturedSelection, preservedMode == .editing {
+                                    let clampedLoc = max(0, min(sel.location, newLength))
+                                    let clampedLen = max(0, min(sel.length, newLength - clampedLoc))
+                                    targetSelection = NSRange(location: clampedLoc, length: clampedLen)
+                                } else if preservedMode == .editing {
+                                    let clamped = max(0, min(anchor.offset, newLength))
+                                    targetSelection = NSRange(location: clamped, length: 0)
+                                }
+                            }
+                        } else {
+                            // No heading anchor (plain offset): restore offset clamped
+                            if let sel = capturedSelection, preservedMode == .editing {
+                                let clampedLoc = max(0, min(sel.location, newLength))
+                                let clampedLen = max(0, min(sel.length, newLength - clampedLoc))
+                                targetSelection = NSRange(location: clampedLoc, length: clampedLen)
+                            } else if preservedMode == .editing {
+                                let clamped = max(0, min(anchor.offset, newLength))
+                                targetSelection = NSRange(location: clamped, length: 0)
+                            }
+                        }
+                    } else if let sel = capturedSelection, preservedMode == .editing {
+                        let clampedLoc = max(0, min(sel.location, newLength))
+                        let clampedLen = max(0, min(sel.length, newLength - clampedLoc))
+                        targetSelection = NSRange(location: clampedLoc, length: clampedLen)
+                    }
+
+                    // Ensure presentationMode unchanged
+                    self.presentationMode = preservedMode
+
+                    // Update pending editing selection for text view
+                    if let target = targetSelection {
+                        self.pendingEditingSelection = target
+                        // Restore via textEditor
+                        self.textEditor?.breakUndoCoalescing()
+                        self.textEditor?.restoreExternalSelection(target)
+                        self.textEditor?.breakUndoCoalescing()
+                    } else if let nav = navigationRequestToPublish {
+                        // Reading mode navigation via M7 route
+                        self.externalReloadNavigationRequest = nav
+                        // Also update lastAnchor to new heading location
+                        self.lastAnchor = nav.anchor
+                    } else {
+                        // No specific navigation, but ensure editor break coalescing
+                        self.textEditor?.breakUndoCoalescing()
+                    }
+
+                    // Ensure document remains clean after revert (revert should have cleared dirty)
+                    // NSDocument's revert will update change count; ensure hasUnautosavedChanges becomes false (native)
+                    // Break undo coalescing again
+                    self.textEditor?.breakUndoCoalescing()
+
+                    // Renderer/outline/bookmark updates happen via @Published text change
+                    // Stale bookmarks remain stale per resolver
+
+                    self.pendingExternalReloadAnchor = nil
+                    self.pendingExternalReloadSelection = nil
+
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    private func revertWithCompletion(to url: URL, ofType typeName: String, completionHandler: @escaping (Error?) -> Void) {
+        do {
+            try self.revert(toContentsOf: url, ofType: typeName)
+            completionHandler(nil)
+        } catch {
+            completionHandler(error)
+        }
+    }
+
+    nonisolated override func revert(toContentsOf url: URL, ofType typeName: String) throws {
+        // Call super on MainActor? NSDocument's revert is expected on main
+        try MainActor.assumeIsolated {
+            // Temporarily set handling flag to avoid recursion in presentedItemDidChange
+            let prev = self.isHandlingExternalReload
+            self.isHandlingExternalReload = true
+            defer { self.isHandlingExternalReload = prev }
+            try super.revert(toContentsOf: url, ofType: typeName)
+            self.markCurrentFileModificationDateAsHandled()
+            // After successful revert: clear undo, clear pending conflict, preserve presentationMode
+            self.undoManager?.removeAllActions()
+            self.hasPendingExternalConflict = false
+            self.pendingExternalChangeScheduled = false
+            // Selection/position preservation for revertToSaved will be handled by caller (performed via menu)
+            // For external clean reload, the async helper already handles selection
+            // For explicit revert, we should preserve approximate position similarly but discard local edits
+            // Capture and restore is done by the caller of revertToSaved? Instead handle here minimally:
+            // Break coalescing
+            self.textEditor?.breakUndoCoalescing()
         }
     }
 
@@ -313,6 +625,32 @@ final class MarkdownDocument: NSDocument, ObservableObject {
     /// Returns `nil` for untitled documents without a file URL.
     var renderingBaseURL: URL? {
         fileURL?.deletingLastPathComponent()
+    }
+
+    // MARK: - Conflict state helpers for tests
+
+    func hasPendingConflictForTesting() -> Bool {
+        hasPendingExternalConflict
+    }
+
+    func pendingExternalReloadAnchorForTesting() -> DocumentAnchor? {
+        pendingExternalReloadAnchor
+    }
+
+    override func presentError(_ error: Error) -> Bool {
+        lastPresentedErrorForTesting = error
+        // In unit-test harness without UI windows, avoid blocking modal presentation that would hang the test
+        let isUITestHost = ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        if isUITestHost && windowControllers.isEmpty {
+            // No window to present in unit test: record and don't block
+            return true
+        }
+        // For UI tests the app process has windows; allow native presentation
+        // Also check if app has no windows yet (early launch) - don't block
+        if windowControllers.isEmpty && NSApp.windows.isEmpty {
+            return true
+        }
+        return super.presentError(error)
     }
 }
 

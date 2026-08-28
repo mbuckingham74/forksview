@@ -52,6 +52,34 @@ A Forksview bookmark is a durable app-owned reference to one semantic Markdown h
 
 - **Multi-document isolation:** Two open documents maintain independent bookmark collections; persistence store may be shared internally but mutations are scoped per document record; two untitled documents have independent session bookmarks; no global bookmark UI.
 
+## Milestone 9: External-change safety and autosave
+
+Forksview retains traditional explicit-save semantics while using AppKit's native out-of-place crash-recovery autosaving.
+
+- **Autosave policy:** `MarkdownDocument.autosavesInPlace == false`, `MarkdownDocument.autosavesDrafts == false`, `NSDocumentController.shared.autosavingDelay = 30` set once at launch after obtaining the shared controller. No custom timer, no override of `scheduleAutosaving()`, `autosave(withImplicitCancellability:completionHandler:)`, `autosavingFileType`, or `autosavedContentsFileURL`. Named and untitled dirty documents use `.autosaveElsewhereOperation`; real file bytes never overwritten, `fileURL` unchanged (`nil` for untitled), `isDocumentEdited` remains true, `hasUnautosavedChanges` becomes false after snapshot and true again after next edit. Recovery URLs never become bookmark identities.
+
+- **External-change detection:** Uses `NSDocument`'s existing `NSFilePresenter` conformance. No second presenter, `DispatchSource`, `FSEvents`, polling, hashing, watcher, or conflict database. Overrides `presentedItemDidChange()` (calls `super`, lightweight, schedules instance-scoped work onto `MainActor`, coalesces duplicates, re-checks `isDocumentEdited`).
+
+- **Clean external modification:** When `isDocumentEdited == false`, preserves `presentationMode`, captures edit selection when editing, derives deterministic semantic heading/relative UTF-16 via `DocumentAnchor` / `DocumentOutlineParser.nearestHeading`, and uses native `revert(toContentsOf:ofType:)` (not a second model). On success `text` becomes external text, document stays clean, old Undo cleared, `NSTextView` updated without registering Undo (delegate suppressed, coalescing broken, selection clamped and restored once, no `replaceText` recursion). Renderer/outline/bookmarks re-resolve; reading mode reuses M7 `DocumentNavigationRequest` when anchor still valid, editing restores caret; mode never flipped merely due to reload. On failure including invalid UTF-8, old model retained, native error presented, no Undo/bookmark mutation.
+
+- **Dirty external modification:** When `isDocumentEdited == true`, never replaces local `text`, never overwrites external file, preserves Undo/selection/mode/dirty, records only minimal per-document `hasPendingExternalConflict` state. Periodic recovery autosave may continue via `.autosaveElsewhereOperation` without touching real file. `File > Save` / close-with-Save stay on native `NSDocument` path for AppKit conflict warnings. `Save As` preserves external source and saves local to new destination. Native `File > Revert to Saved` requires confirmation, discards only after confirmation, reloads via `NSDocument`, clears Undo and pending conflict, preserves presentation/position where reasonable, guards against recursion from its own presenter activity. Undo returning a dirty document to clean schedules the clean reload without requiring another filesystem event (via `updateChangeCount`).
+
+- **Save discrimination:** `save(to:ofType:for:completionHandler:)` is the only bookmark-binding discriminator (always calls `super`, captures pre-save `fileURL`, acts only after success). Handles every `SaveOperationType`: `.saveOperation` (no clone/rebind if already file-backed; if pre-save `nil` treat as first save and bind untitled session bookmarks), `.saveAsOperation` (source record preserved, destination gets current in-memory bookmarks, untitled binds session, bound only after success, never clones stale store over newer in-memory state), `.saveToOperation` (export/copy, `fileURL` unchanged, no bookmark mutation), `.autosaveElsewhereOperation` (recovery, `fileURL` unchanged, `isDocumentEdited` stays true, no bookmark/conflict mutation), `.autosaveInPlaceOperation` / `.autosaveAsOperation` unreachable but defensively no-ops, future unknown preserves AppKit with no side effects. Failed/cancelled saves produce no bookmark mutation.
+
+- **Recovery/restoration:** Inherited `NSDocument` recovery; no custom database or second model. Named recovered document: contents may come from `autosavedContentsFileURL`, original `fileURL` remains, stays edited until Save/Revert, bookmarks stay with original identity. Untitled recovered: `fileURL == nil`, restored text dirty, first explicit save binds session bookmarks. Recovery URL never becomes bookmark identity; M8 never-saved untitled bookmarks not required to survive crash.
+
+- **Rename/move:** Small adapter overriding `presentedItemDidMove(to:)` (calls `super`, lets `NSDocument` update `fileURL`, does not move file, does not rediscover by path, refreshes existing Foundation URL-bookmark record/`lastKnownPath` for new URL without replacing in-memory bookmarks, refreshes `renderingBaseURL`-observed presentation, preserves text/dirty/Undo/selection/mode, no path-based identity).
+
+- **Deletion/unavailability:** Native `NSDocument`/`NSFilePresenter` accommodation; does not recreate deleted path, does not delete bookmark records on temporary unavailability, keeps in-memory contents, post-deletion edits may be recovery-autosaved elsewhere without recreating original, explicit Save/Revert/Save As/close use native warnings/errors.
+
+- **NSTextView sync:** Programmatic external-reload updates disable Undo registration, suppress delegate feedback (`isSynchronizingText`), set `string` from `MarkdownDocument.text`, break coalescing, clear obsolete Undo after native revert, clamp selection to valid UTF-16, restore once, never recursively call `replaceText`, never mark dirty or create Undo entries, no second buffer.
+
+- **Position preservation:** Reuses M5/M7 `DocumentAnchor` / `DocumentNavigationRequest` (`offset` UTF-16 + heading). When previous semantic target still resolves, reading reuses M7 navigation route, editing restores caret relative to resolved heading; ambiguous duplicate headings are not guessed (treated stale with safe clamp/fallback).
+
+- **Multi-document isolation:** All M9 runtime state is instance-scoped (`pendingExternalChangeScheduled`, `hasPendingExternalConflict`, `isHandlingExternalReload`, anchors); no global external-change state; mutation of document A never affects B.
+
+- **File menu:** Native `File > Revert to Saved` via `NSDocument.revertToSaved(_:)` responder-chain action; no custom sheet if AppKit provides native workflow. Existing Save/Save As/Close/Open/New/Undo/Redo/Command-E routing unchanged.
+
 ## Milestone order
 
 1. Configuration and document skeleton

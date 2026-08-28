@@ -5,7 +5,9 @@ import SwiftUI
 protocol MarkdownTextEditing: AnyObject {
     func breakUndoCoalescing()
     func selectedRange() -> NSRange
+    func synchronizeTextView(with text: String)
     func handleNavigation(_ request: DocumentNavigationRequest, outline: [DocumentOutlineItem])
+    func restoreExternalSelection(_ range: NSRange)
 }
 
 @MainActor
@@ -101,12 +103,38 @@ struct MarkdownTextView: NSViewRepresentable {
             }
             isSynchronizingText = true
             let undoManager = textView.undoManager
+            // Break coalescing before programmatic replacement per M9
+            textView.breakUndoCoalescing()
             undoManager?.disableUndoRegistration()
             defer {
                 undoManager?.enableUndoRegistration()
+                textView.breakUndoCoalescing()
                 isSynchronizingText = false
             }
             textView.string = text
+        }
+
+        func restoreExternalSelection(_ range: NSRange) {
+            guard let textView else { return }
+            let maxLen = (textView.string as NSString).length
+            let clampedLoc = max(0, min(range.location, maxLen))
+            let clampedLen = max(0, min(range.length, maxLen - clampedLoc))
+            let clamped = NSRange(location: clampedLoc, length: clampedLen)
+            isSynchronizingText = true
+            let um = textView.undoManager
+            um?.disableUndoRegistration()
+            textView.breakUndoCoalescing()
+            defer {
+                um?.enableUndoRegistration()
+                textView.breakUndoCoalescing()
+                isSynchronizingText = false
+            }
+            textView.setSelectedRange(clamped)
+            textView.scrollRangeToVisible(clamped)
+            // Ensure first responder remains textView if in editing mode
+            if let window = textView.window, window.firstResponder !== textView {
+                window.makeFirstResponder(textView)
+            }
         }
 
         func handleNavigation(_ request: DocumentNavigationRequest, outline: [DocumentOutlineItem]) {
