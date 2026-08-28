@@ -54,6 +54,7 @@ final class MarkdownDocument: NSDocument, ObservableObject {
     private var hasPendingExternalConflict = false
     private var isHandlingExternalReload = false
     private var lastHandledExternalFileModificationDate: Date?
+    private var lastHandledExternalFileContents: Data?
     private var pendingExternalReloadAnchor: DocumentAnchor?
     private var pendingExternalReloadSelection: NSRange?
 
@@ -65,7 +66,7 @@ final class MarkdownDocument: NSDocument, ObservableObject {
         let hostingController = NSHostingController(rootView: shellView)
         let window = NSWindow(contentViewController: hostingController)
         window.setContentSize(NSSize(width: 1100, height: 700))
-        window.contentMinSize = NSSize(width: 640, height: 480)
+        window.contentMinSize = NSSize(width: 840, height: 480)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.setAccessibilityIdentifier("documentWindow")
         window.titleVisibility = .visible
@@ -342,6 +343,7 @@ final class MarkdownDocument: NSDocument, ObservableObject {
 
     private func markCurrentFileModificationDateAsHandled() {
         lastHandledExternalFileModificationDate = currentPresentedFileModificationDate()
+        lastHandledExternalFileContents = currentPresentedFileContents()
     }
 
     private func currentPresentedFileModificationDate() -> Date? {
@@ -350,6 +352,11 @@ final class MarkdownDocument: NSDocument, ObservableObject {
         }
         return (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.modificationDate]) as? Date
             ?? fileModificationDate
+    }
+
+    private func currentPresentedFileContents() -> Data? {
+        guard let fileURL else { return nil }
+        return try? Data(contentsOf: fileURL)
     }
 
     nonisolated override func accommodatePresentedItemDeletion(completionHandler: @escaping (Error?) -> Void) {
@@ -387,17 +394,32 @@ final class MarkdownDocument: NSDocument, ObservableObject {
                 self.hasPendingExternalConflict = true
                 return
             } else {
-                guard self.currentPresentedFileModificationDate() != self.lastHandledExternalFileModificationDate else {
+                let currentModificationDate = self.currentPresentedFileModificationDate()
+                let currentContents = self.currentPresentedFileContents()
+                guard currentModificationDate != self.lastHandledExternalFileModificationDate
+                    || currentContents != self.lastHandledExternalFileContents
+                    || currentContents != Data(self.text.utf8) else {
                     return
                 }
                 // Clean: perform external reload
                 self.hasPendingExternalConflict = false
-                await self.performCleanExternalReload(from: fileURL)
+                let didReload = await self.performCleanExternalReload(from: fileURL)
+                // A second write can arrive while the first reload is in flight.
+                // Recheck after the reload so the final on-disk contents win.
+                if didReload && !self.isDocumentEdited {
+                    let latestModificationDate = self.currentPresentedFileModificationDate()
+                    let latestContents = self.currentPresentedFileContents()
+                    if latestModificationDate != self.lastHandledExternalFileModificationDate
+                        || latestContents != self.lastHandledExternalFileContents
+                        || latestContents != Data(self.text.utf8) {
+                        self.scheduleExternalChangeHandling()
+                    }
+                }
             }
         }
     }
 
-    private func performCleanExternalReload(from fileURL: URL) async {
+    private func performCleanExternalReload(from fileURL: URL) async -> Bool {
         // Preserve presentationMode and capture selection/anchor
         let preservedMode = presentationMode
         let oldOutline = DocumentOutlineParser.outline(from: text)
@@ -437,21 +459,21 @@ final class MarkdownDocument: NSDocument, ObservableObject {
 
         // Use native revert toContentsOf:ofType:
         // Use completionHandler variant to handle success/failure without blocking
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             // NSDocument revert has a synchronous throws version and async completionHandler version
             // We use the async one via revert(toContentsOf:ofType:completionHandler:) if available
             // Fallback to synchronous in Task: try revert(toContentsOf:ofType:)
             // Need to handle invalid UTF-8 error path
             self.revertWithCompletion(to: fileURL, ofType: typeName) { [weak self] error in
                 guard let self = self else {
-                    continuation.resume()
+                    continuation.resume(returning: false)
                     return
                 }
                 Task { @MainActor in
                     if let error = error {
                         // Failed: retain old model, present native document error, do not mutate undo/bookmarks
                         _ = self.presentError(error)
-                        continuation.resume()
+                        continuation.resume(returning: false)
                         return
                     }
                     self.markCurrentFileModificationDateAsHandled()
@@ -581,7 +603,7 @@ final class MarkdownDocument: NSDocument, ObservableObject {
                     self.pendingExternalReloadAnchor = nil
                     self.pendingExternalReloadSelection = nil
 
-                    continuation.resume()
+                    continuation.resume(returning: true)
                 }
             }
         }

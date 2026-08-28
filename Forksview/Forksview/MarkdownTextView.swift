@@ -233,7 +233,15 @@ final class MarkdownTextEditorScrollView: NSScrollView {
         textView.allowsUndo = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
+        // M10 readability: native fixed-pitch, readable size, insets via native config only
+        if let fixed = NSFont.userFixedPitchFont(ofSize: NSFont.systemFontSize) {
+            textView.font = fixed
+        } else {
+            textView.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        }
+        textView.textContainerInset = NSSize(width: 16, height: 14)
         textView.setAccessibilityIdentifier("markdownTextEditor")
+        textView.setAccessibilityLabel("Markdown editor")
     }
 
     @available(*, unavailable)

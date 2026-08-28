@@ -80,6 +80,38 @@ Forksview retains traditional explicit-save semantics while using AppKit's nativ
 
 - **File menu:** Native `File > Revert to Saved` via `NSDocument.revertToSaved(_:)` responder-chain action; no custom sheet if AppKit provides native workflow. Existing Save/Save As/Close/Open/New/Undo/Redo/Command-E routing unchanged.
 
+## Milestone 10: Visual/accessibility pass
+
+Bounded polish/accessibility milestone that closes the documented current v1 roadmap. No architecture changes, no new document model, no History implementation, no feature work.
+
+- **Window and pane layout:** Preserves initial 1100×700, NavigationSplitView + .inspector, native materials/dividers, per-window state, existing column width ranges. Changes tested minimum content size to 840×480 to accommodate sidebar 180 / center 420 / inspector 220. At minimum, medium, and large sizes all panes remain usable without unusable clipping; scrolling and inspector controls remain reachable. No custom split-view implementation.
+
+- **Toolbar / titlebar:** Preserves unified native toolbar, visible document title, native dirty indication, existing identifiers, single AppKit Command-E route. Improves accessibility state: History control label toggles Show/Hide History Sidebar with value Shown/Hidden; Inspector control label toggles Show/Hide Inspector with value Shown/Hidden; Reading/Edit mode control uses action-oriented label and value Reading mode / Editing mode. No new toolbar items.
+
+- **Reading view:** Keeps MarkdownUI 2.4.1 and renderer architecture. Centers rendered Markdown in readable column with maximum ~760 (accepted 720–800 only if 760 proven inappropriate), at least 24 horizontal and 16 vertical padding, full vertical scrolling, text selection, links, images, code blocks, tables, task lists, duplicate-heading navigation, baseURL, long-document behavior. Wide tables/code remain usable and not clipped by readable-width treatment. Accessibility: scroll region labeled Markdown document, preserves markdownReadingView identifier, reading mode is keyboard-scrollable focus target; Command-E into reading focuses markdownReadingView and arrow/Page Up/Page Down actually scroll. Replaces fixed RGB readingDivider/readingTertiary with semantic AppKit colors (separatorColor / secondaryLabelColor) so light/dark and Increased Contrast participate. No parallel Markdown accessibility renderer.
+
+- **Native editor:** Keeps MarkdownTextEditorScrollView and retained NSTextView architecture. Improves readability using native macOS configuration only: native user/system fixed-pitch font, readable standard Mac text size, ~16 horizontal and ~14 vertical text-container inset. NSTextView accessibility label Markdown editor. Preserves plain text, selection, caret, Undo/Redo, find, spellcheck, text services, Cut/Copy/Paste, scrolling, delegate sync, M9 reload sync, dirty lifecycle. No SwiftUI TextEditor, no fixed centered column, no rich text, no custom Undo, no syntax highlighting.
+
+- **History sidebar:** No History implementation. Preserves History title, honest No history yet empty state, width range, native material, scrolling. Adds nonduplicative region label History sidebar for VoiceOver. No recent-file database, history model, or timeline.
+
+- **Inspector structure:** Fixes long-outline problem. Keeps width range, identifiers, On This Page, Bookmarks, outline/bookmark semantics. Uses two vertically arranged labeled regions: On This Page flexible height independently scrollable and takes remaining height; Bookmarks always discoverable below outline, independently scrollable with approximately min 120 ideal 160 max 220, so very long outline never pushes Bookmarks offscreen. Uses native SwiftUI layout/scrolling, no new inspector architecture.
+
+- **Outline:** Preserves source order, indentation, duplicate occurrence semantics, two-line truncation, navigation route, bookmark toggles, stable identifiers. Rows remain actionable controls. VoiceOver labels remain useful including heading title, level, and duplicate occurrence where applicable (e.g., Installation, heading level 2, 1 of 2). Keyboard activation continues to work. No parser/model/navigation/resolution changes.
+
+- **Bookmarks:** Preserves all M8 behavior (empty state, resolved/stale, add/remove, navigation, ordering, persistence, Save As, stale resolution, identifiers, no dirty changes, no Undo system). Bookmark toggles expose accessibility values Bookmarked / Not bookmarked (no empty value). Resolved bookmarks remain navigable/removable. Stale navigation remains disabled with accessibility unavailable, removal remains enabled, visually shows explicit semantic text Unavailable (plus system-native warning where trivial) — not opacity/color only. After removal focus moves deterministically to next bookmark, otherwise previous, otherwise Bookmarks heading or empty state, never leaving focus nowhere. Preserves No bookmarks yet. Removes duplicate accessibility identifier from noncanonical section-title child, keeping canonical container identifiers stable. No DocumentBookmark/resolver/store/schema/order/Undo changes.
+
+- **Keyboard and focus:** Command-E entering edit focuses markdownTextEditor; entering reading focuses markdownReadingView with Page Up/Page Down and arrow scrolling. Reading-mode outline/bookmark navigation preserves focus on initiating control where practical; editing-mode outline/bookmark navigation focuses NSTextView at destination. Pane hiding moves focus to corresponding toolbar toggle or appropriate center content target, never stranding focus. With macOS Keyboard Navigation enabled, toolbar controls, outline rows, bookmark toggles, navigation, stale remove controls, and pane controls are keyboard reachable and operable. No new shortcuts.
+
+- **VoiceOver / accessibility:** Accessibility identifiers alone are not sufficient. Adds useful nonduplicative semantics for Markdown reading region, editor, History sidebar, inspector, outline, and bookmarks. Controls expose appropriate roles/labels/values/state/enabled/disabled. Avoids meaningless duplicate announcements. Preserves MarkdownUI child accessibility. No duplicate parser-derived accessibility tree. Rendered Markdown links remain visibly links, are announced meaningfully, and are actionable through VoiceOver. No MarkdownUI replacement.
+
+- **Appearance / contrast / motion:** Uses system semantic colors/materials. Verified light/dark, Increased Contrast, Differentiate Without Color where relevant. Stale/unavailable and bookmarked states not color-only, disabled states remain legible, editor and rendered Markdown remain readable. Keeps existing Reduce Motion handling, adds no gratuitous animation, no custom theme/settings/iOS Dynamic Type/text-size controls, normal native macOS typography.
+
+- **Native document UI:** Does not customize or replace native Open/Save/Save As/Close-with-save/Revert/conflict dialogs/deletion/error sheets; preserves focus restoration after sheets. No change to ForksviewApp.swift except concrete M10 defect. Single AppKit Command-E route remains untouched. M9 external-change/autosave/conflict architecture remains native and unchanged; the bounded reload guard also compares loaded text with current file bytes so rapid writes cannot leave an intermediate version displayed.
+
+No new production file or abstraction is justified. Expected modified files: MarkdownDocument.swift (minimum size plus bounded rapid-reload guard), DocumentShellView.swift (toolbar accessibility state + bounded focus coordination), DocumentRootView.swift (reading/editing first-responder transitions), MarkdownReadingView.swift (centered readable width, semantic colors, accessibility label, keyboard reading focus), MarkdownTextView.swift (native font, inset, accessibility label), DocumentInspectorPlaceholderView.swift (independent section scrolling, explicit stale state, bookmark control state, removal focus), HistorySidebarPlaceholderView.swift (only if needed for region semantics), docs/architecture.md (this record).
+
+**M10 closes the documented current v1 roadmap.**
+
 ## Milestone order
 
 1. Configuration and document skeleton
@@ -91,4 +123,4 @@ Forksview retains traditional explicit-save semantics while using AppKit's nativ
 7. Outline navigation
 8. Bookmarks
 9. External-change safety and autosave
-10. Visual/accessibility pass
+10. Visual/accessibility pass — closes current v1 roadmap

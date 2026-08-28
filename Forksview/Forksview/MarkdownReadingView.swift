@@ -9,17 +9,20 @@ import MarkdownUI
 /// title, and a transient UUID for scrollTo. Duplicate handling via (level, title,
 /// occurrence) resolver. Stale requests discarded, pending retained until targets
 /// for newest source snapshot publish.
+/// Milestone 10: Centered readable width, semantic colors, accessible reading region.
 
 @MainActor
 struct MarkdownReadingView: View {
     let markdown: String
     let baseURL: URL?
+    let isActive: Bool
     var outline: [DocumentOutlineItem] = []
     @Binding var navigationRequest: DocumentNavigationRequest?
 
-    init(markdown: String, baseURL: URL? = nil, outline: [DocumentOutlineItem] = [], navigationRequest: Binding<DocumentNavigationRequest?> = .constant(nil)) {
+    init(markdown: String, baseURL: URL? = nil, isActive: Bool = true, outline: [DocumentOutlineItem] = [], navigationRequest: Binding<DocumentNavigationRequest?> = .constant(nil)) {
         self.markdown = markdown
         self.baseURL = baseURL
+        self.isActive = isActive
         self.outline = outline
         self._navigationRequest = navigationRequest
     }
@@ -31,17 +34,34 @@ struct MarkdownReadingView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
-                Markdown(markdown, baseURL: baseURL)
-                    .markdownTheme(readingTheme)
-                    .markdownImageProvider(HybridBlockImageProvider())
-                    .markdownInlineImageProvider(HybridInlineImageProvider())
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 16)
+                VStack(alignment: .center, spacing: 0) {
+                    Markdown(markdown, baseURL: baseURL)
+                        .markdownTheme(readingTheme)
+                        .markdownImageProvider(HybridBlockImageProvider())
+                        .markdownInlineImageProvider(HybridInlineImageProvider())
+                        .textSelection(.enabled)
+                        // Centered readable column: max 760, with required padding
+                        .frame(maxWidth: 760, alignment: .leading)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 16)
+                        // Allow wide tables/code to remain usable: do not clip, allow horizontal scroll if content exceeds readable width
+                        // The Markdown container itself is constrained to 760 but internal scrollable elements (code/table) handle overflow
+                        .fixedSize(horizontal: false, vertical: false)
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                // SwiftUI's focus system does not make a ScrollView an AppKit
+                // first responder on macOS. Keep the renderer in SwiftUI, but
+                // place a hidden native responder in this scroll view's content
+                // so keyboard scrolling is a real event path.
+                .background {
+                    ReadingKeyboardFocusView(isActive: isActive)
+                        .frame(width: 1, height: 1)
+                        .accessibilityHidden(true)
+                }
             }
             .background(Color(nsColor: .textBackgroundColor))
             .accessibilityElement(children: .contain)
+            .accessibilityLabel("Markdown document")
             .accessibilityIdentifier("markdownReadingView")
             .onPreferenceChange(RenderedHeadingsPreferenceKey.self) { newTargets in
                 renderedTargets = newTargets
@@ -193,19 +213,91 @@ struct MarkdownReadingView: View {
     }
 
     private var readingDivider: Color {
-        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
-            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ?
-                NSColor(red: 0x33/255.0, green: 0x34/255.0, blue: 0x38/255.0, alpha: 1) :
-                NSColor(red: 0xd0/255.0, green: 0xd0/255.0, blue: 0xd3/255.0, alpha: 1)
-        }))
+        Color(nsColor: .separatorColor)
     }
 
     private var readingTertiary: Color {
-        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
-            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ?
-                NSColor(red: 0x6d/255.0, green: 0x70/255.0, blue: 0x7d/255.0, alpha: 1) :
-                NSColor(red: 0x6b/255.0, green: 0x6e/255.0, blue: 0x7b/255.0, alpha: 1)
-        }))
+        Color(nsColor: .secondaryLabelColor)
+    }
+}
+
+private struct ReadingKeyboardFocusView: NSViewRepresentable {
+    let isActive: Bool
+
+    func makeNSView(context: Context) -> ReadingKeyboardFocusNSView {
+        ReadingKeyboardFocusNSView(isActive: isActive)
+    }
+
+    func updateNSView(_ nsView: ReadingKeyboardFocusNSView, context: Context) {
+        nsView.isActive = isActive
+        if isActive {
+            nsView.requestFocus()
+        } else if nsView.window?.firstResponder === nsView {
+            nsView.window?.makeFirstResponder(nil)
+        }
+    }
+}
+
+@MainActor
+private final class ReadingKeyboardFocusNSView: NSView {
+    var isActive: Bool
+
+    init(isActive: Bool) {
+        self.isActive = isActive
+        super.init(frame: .zero)
+        setAccessibilityElement(false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var acceptsFirstResponder: Bool { isActive }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        requestFocus()
+    }
+
+    func requestFocus() {
+        guard isActive, let window else { return }
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, self.isActive, let window else { return }
+            window.makeFirstResponder(self)
+        }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard isActive, let scrollView = enclosingScrollView else {
+            super.keyDown(with: event)
+            return
+        }
+
+        let clipView = scrollView.contentView
+        var origin = clipView.bounds.origin
+        let lineDistance = max(24, clipView.bounds.height * 0.1)
+        let pageDistance = max(24, clipView.bounds.height * 0.9)
+
+        switch event.keyCode {
+        case 126: // Up arrow
+            origin.y -= lineDistance
+        case 125: // Down arrow
+            origin.y += lineDistance
+        case 116: // Page Up
+            origin.y -= pageDistance
+        case 121: // Page Down
+            origin.y += pageDistance
+        default:
+            super.keyDown(with: event)
+            return
+        }
+
+        let documentHeight = scrollView.documentView?.frame.height ?? 0
+        let maximumY = max(0, documentHeight - clipView.bounds.height)
+        origin.y = min(max(0, origin.y), maximumY)
+        clipView.scroll(to: origin)
+        scrollView.reflectScrolledClipView(clipView)
     }
 }
 
